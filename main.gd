@@ -28,10 +28,19 @@ const FOE_COLOR: Color = Color(0.2, 0.85, 0.8)
 const TEXT_COLOR: Color = Color(0.96, 0.9, 0.78)
 const PANEL_BG: Color = Color(0.11, 0.06, 0.035, 0.94)
 
-const BASE_SHAPES: Dictionary = {
-	"jantung": {"label": "Gasing Jantung", "mass": 2.4, "spin_reserve": 70.0, "balance": 60.0},
-	"uri": {"label": "Gasing Uri", "mass": 1.4, "spin_reserve": 105.0, "balance": 78.0},
+# Fixed base stats per style; "shape" is the physics archetype (radius/role),
+# "mesh" the glb id. The 4 unlockable styles copy their AI owner's preset stats.
+const STYLE_DEFS: Dictionary = {
+	"jantung": {"label": "Gasing Jantung", "shape": "jantung", "mesh": "jantung", "mass": 2.4, "spin_reserve": 70.0, "balance": 60.0},
+	"uri": {"label": "Gasing Uri", "shape": "uri", "mesh": "uri", "mass": 1.4, "spin_reserve": 105.0, "balance": 78.0},
+	"pakdin": {"label": "Gasing Pak Din", "shape": "uri", "mesh": "pakdin", "mass": 1.5, "spin_reserve": 88.0, "balance": 66.0},
+	"cikros": {"label": "Gasing Cik Ros", "shape": "jantung", "mesh": "cikros", "mass": 2.2, "spin_reserve": 70.0, "balance": 62.0},
+	"tokgayong": {"label": "Gasing Tok Gayong", "shape": "jantung", "mesh": "tokgayong", "mass": 2.7, "spin_reserve": 76.0, "balance": 68.0},
+	"datuk": {"label": "Gasing Datuk", "shape": "jantung", "mesh": "datuk", "mass": 2.9, "spin_reserve": 82.0, "balance": 74.0},
 }
+const DEFAULT_STYLES: Array[String] = ["jantung", "uri"]
+const NET_MATCH_TARGET: int = 3
+const SAVE_PATH: String = "user://workshop.cfg"
 const MATERIAL_DEFS: Dictionary = {
 	"merbau": {"label": "Kayu Merbau", "mass": 0.3, "balance": 0.0},
 	"kemuning": {"label": "Kayu Kemuning", "mass": 0.0, "balance": 7.0},
@@ -50,7 +59,7 @@ const STRINGS: Dictionary = {
 		"fact": "Did you know? Gasing is a heritage sport of Kelantan and Melaka.",
 		"prompt": "Press SPACE for single player",
 		"wind_hint": "Hold SPACE / left mouse to wind the cord — release in the GREEN zone!  (A/D to aim)",
-		"bench": "CRAFTING BENCH",
+		"bench": "WORKSHOP",
 		"duel_line": "Duel %d / %d  —  Opponent: %s",
 		"craft_duel_line": "Duel %d / %d  —  Next opponent: %s",
 		"mats_line": "Materials:  Merbau %d  ·  Kemuning %d  ·  Besi %d",
@@ -118,6 +127,26 @@ const STRINGS: Dictionary = {
 		"opp_left": "OPPONENT DISCONNECTED",
 		"back_menu": "BACK TO MENU",
 		"vs_line": "Duel vs %s",
+		"locked_hint": "Beat %s to unlock",
+		"locked_info": "Locked — defeat %s in single player to unlock.",
+		"unlocked_title": "NEW GASING UNLOCKED!",
+		"unlock_line": "%s's gasing joins your workshop!",
+		"unlock_try": "%s unlocked — take it for a spin!",
+		"mats_saved": "Stored in your workshop.",
+		"first_to_3": "First to 3 wins",
+		"match_point": "MATCH POINT!",
+		"opp_ready": "%s is ready!",
+		"match_win": "MATCH WON!",
+		"match_lose": "%s takes the match...",
+		"match_mats": "Materials this match:",
+		"win_bonus": "Winner's bonus: +1 %s",
+		"rematch": "REMATCH",
+		"rematch_wait": "Waiting for %s...",
+		"rematch_offer": "%s wants a rematch!",
+		"role_pakdin": "Steady spinner — calm and enduring",
+		"role_cikros": "Swift striker — sharp pangkah",
+		"role_tokgayong": "Heavy striker — crushing weight",
+		"role_datuk": "The master's top — power and poise",
 	},
 	"ms": {
 		"heritage": "Permainan warisan Melayu — pusing gasingmu, pangkah lawan, jadi juara gelanggang.",
@@ -192,14 +221,38 @@ const STRINGS: Dictionary = {
 		"opp_left": "LAWAN TERPUTUS SAMBUNGAN",
 		"back_menu": "KEMBALI KE MENU",
 		"vs_line": "Duel lawan %s",
+		"locked_hint": "Kalahkan %s untuk buka",
+		"locked_info": "Berkunci — kalahkan %s dalam mod sendirian untuk membukanya.",
+		"unlocked_title": "GASING BARU DIBUKA!",
+		"unlock_line": "Gasing %s kini dalam bengkel kamu!",
+		"unlock_try": "%s dibuka — cuba pusingkan!",
+		"mats_saved": "Disimpan dalam bengkel kamu.",
+		"first_to_3": "Pertama capai 3 kemenangan",
+		"match_point": "MATA PENENTU!",
+		"opp_ready": "%s sudah sedia!",
+		"match_win": "MENANG PERLAWANAN!",
+		"match_lose": "%s memenangi perlawanan...",
+		"match_mats": "Bahan perlawanan ini:",
+		"win_bonus": "Bonus juara: +1 %s",
+		"rematch": "LAWAN SEMULA",
+		"rematch_wait": "Menunggu %s...",
+		"rematch_offer": "%s mahu lawan semula!",
+		"role_pakdin": "Pemusing seimbang — tenang dan tahan",
+		"role_cikros": "Pemangkah pantas — pangkah tajam",
+		"role_tokgayong": "Pemangkah berat — hentaman padu",
+		"role_datuk": "Gasing mahaguru — kuasa dan imbangan",
 	},
 }
 
 var lang: String = "en"
 var state: State = State.READY
+# persistent workshop state (saved to SAVE_PATH; loaded once in _ready)
 var player_shapes: Dictionary = {}
 var materials_owned: Dictionary = {}
 var selected_shape: String = "jantung"
+var unlocked_styles: Array[String] = []
+var pending_unlock: String = "" # style to showcase on next CRAFT entry
+var workshop_preview: Node3D = null
 var duel_index: int = 0
 var run_won: bool = false
 var player_top: Gasing = null
@@ -234,13 +287,26 @@ var ready_fact: Label = null
 var ready_prompt: Label = null
 var craft_title: Label = null
 var craft_duel_label: Label = null
+var craft_sub: Label = null
 var craft_mats_hint: Label = null
 var craft_info: Label = null
+var craft_opp_status: Label = null
 var round_label: Label = null
 var award_label: Label = null
+var round_award_row: HBoxContainer = null
+var mats_saved_label: Label = null
+var unlock_label: Label = null
+var match_point_label: Label = null
 var over_title: Label = null
 var over_stats: Label = null
 var over_hint: Label = null
+var over_mats_title: Label = null
+var over_award_row: HBoxContainer = null
+var over_bonus_label: Label = null
+var rematch_status: Label = null
+var score_row: HBoxContainer = null
+var my_pips: ScorePips = null
+var opp_pips: ScorePips = null
 var fight_button: Button = null
 var restart_button: Button = null
 var shape_cards: Dictionary = {}
@@ -285,6 +351,10 @@ var net_opp_wind_in: bool = false
 var net_my_wins: int = 0
 var net_opp_wins: int = 0
 var net_client_nudge_cd: float = 0.0
+var net_rematch_sent: bool = false
+var net_opp_rematch: bool = false
+var net_bonus_text: String = "" # match-bonus line cached for the match-over screen
+var net_match_mats: Dictionary = {} # per-match material tally for the match-over screen
 
 var _netbot: bool = false # debug autopilot for LAN testing: run with `-- netbot-host` or `-- netbot-join`
 var _netbot_cd: float = 0.0
@@ -314,6 +384,7 @@ func _ready() -> void:
 	Online.server_disconnected.connect(_on_mp_server_disconnected)
 	Online.connection_failed.connect(_on_mp_connection_failed)
 	Online.lobby_join_response.connect(_on_mp_steam_join_response)
+	_load_workshop()
 	_reset_run()
 	_apply_language()
 	_enter_state(State.READY)
@@ -328,6 +399,8 @@ func _t(key: String) -> String:
 
 func _enter_state(next: State) -> void:
 	state = next
+	if next != State.CRAFT:
+		_clear_preview()
 	match next:
 		State.READY:
 			_clear_tops()
@@ -339,8 +412,18 @@ func _enter_state(next: State) -> void:
 			net_ready_sent = false
 			net_opp_config = {}
 			fight_button.disabled = false
+			craft_opp_status.text = ""
 			craft_info.text = _t("pick_info")
+			if pending_unlock != "":
+				# showcase the freshly unlocked style: auto-select it so the 3D
+				# preview pops it in, and nudge the player to try it
+				selected_shape = pending_unlock
+				craft_info.text = _t("unlock_try") % String(STYLE_DEFS[pending_unlock].label)
+				_play_sfx(SND_WIN, -8.0, 0.05)
+				pending_unlock = ""
+				_save_workshop()
 			_refresh_craft()
+			_update_workshop_preview()
 			_show_panel(craft_panel)
 		State.WIND:
 			_show_panel(null)
@@ -377,7 +460,9 @@ func _enter_state(next: State) -> void:
 		State.OVER:
 			_clear_tops()
 			_set_hud_visible(false)
-			over_menu_button.visible = not net_active # in MP the restart button IS back-to-menu
+			# MP match-over offers REMATCH + back-to-menu; the disconnect screen
+			# (net_ended) keeps only the restart button acting as back-to-menu
+			over_menu_button.visible = not net_active or not net_ended
 			_show_panel(over_panel)
 
 
@@ -407,10 +492,39 @@ func _unhandled_input(event: InputEvent) -> void:
 				aim_angle = clampf(aim_angle - motion.relative.x * 0.003, -1.1, 1.1)
 		State.OVER:
 			if event.is_action_pressed("ui_accept"):
-				if net_active:
-					_net_teardown()
-				else:
-					_restart_run()
+				_on_restart_pressed() # SP restart / MP rematch / disconnect teardown
+
+
+func _process(delta: float) -> void:
+	if is_instance_valid(workshop_preview):
+		workshop_preview.rotate_y(2.5 * delta)
+
+
+func _update_workshop_preview() -> void:
+	_clear_preview()
+	if state != State.CRAFT:
+		return
+	var scene: PackedScene = load("res://assets/gasing_%s.glb" % String(STYLE_DEFS[selected_shape].mesh))
+	if scene == null:
+		return
+	workshop_preview = scene.instantiate() as Node3D
+	add_child(workshop_preview)
+	# park it on the arena floor in the strip right of the workshop panel;
+	# unprojecting survives the canvas_items/expand stretch at any aspect
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var screen: Vector2 = Vector2(vp.x * 0.88, vp.y * 0.55)
+	var hit: Variant = Plane(Vector3.UP, 0.0).intersects_ray(camera.project_ray_origin(screen), camera.project_ray_normal(screen))
+	if hit != null:
+		workshop_preview.position = hit
+	workshop_preview.scale = Vector3(0.01, 0.01, 0.01)
+	var tw: Tween = create_tween()
+	tw.tween_property(workshop_preview, "scale", Vector3(1.5, 1.5, 1.5), 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _clear_preview() -> void:
+	if is_instance_valid(workshop_preview):
+		workshop_preview.queue_free()
+	workshop_preview = null
 
 
 func _physics_process(delta: float) -> void:
@@ -465,10 +579,11 @@ func _spawn_top(is_player: bool) -> Gasing:
 	g.puppet = net_active and not _net_is_host() # client renders both tops from host snapshots
 	if is_player:
 		var my_name: String = Online.personal_player_data.display_name if net_active else _t("you")
-		g.setup(my_name, selected_shape, player_shapes[selected_shape], PLAYER_COLOR)
+		g.setup(my_name, String(STYLE_DEFS[selected_shape].shape), _style_battle_stats(selected_shape), PLAYER_COLOR)
 		g.position = Vector3(0.0, 0.0, 3.0)
 	elif net_active:
-		g.setup(String(net_opp_config.get("name", net_opp_name)), String(net_opp_config.get("shape", "jantung")), net_opp_config.get("stats", BASE_SHAPES["jantung"]), FOE_COLOR)
+		var opp_style: String = String(net_opp_config.get("shape", "jantung"))
+		g.setup(String(net_opp_config.get("name", net_opp_name)), String(STYLE_DEFS[opp_style].shape), net_opp_config.get("stats", STYLE_DEFS["jantung"]), FOE_COLOR)
 		g.position = Vector3(0.0, 0.0, -3.0)
 	else:
 		var opp: Dictionary = OPPONENTS[duel_index]
@@ -683,6 +798,7 @@ func _finish_duel(player_wins: bool) -> void:
 	battle_hint.visible = false
 	player_gauge.wobbling = false
 	foe_gauge.wobbling = false
+	_reset_round_panel()
 	if net_active:
 		if player_wins:
 			net_my_wins += 1
@@ -694,33 +810,101 @@ func _finish_duel(player_wins: bool) -> void:
 			_play_sfx(SND_LOSE, -3.0, 0.02)
 			round_label.text = _t("round_lose") % net_opp_name
 			round_label.add_theme_color_override("font_color", FOE_COLOR)
+		var match_over: bool = net_my_wins >= NET_MATCH_TARGET or net_opp_wins >= NET_MATCH_TARGET
+		if player_wins:
+			var counts: Dictionary = _grant_materials(_rng.randi_range(1, 2))
+			_tally_match_mats(counts)
+			_show_award_icons(round_award_row, counts, "+%d")
+			mats_saved_label.text = _t("mats_saved")
+			mats_saved_label.visible = true
+			if match_over:
+				var bonus: Dictionary = _grant_materials(1)
+				_tally_match_mats(bonus)
+				net_bonus_text = _t("win_bonus") % _mat_summary(bonus)
+			_save_workshop() # bank rewards NOW — a disconnect during the pause cannot void them
+		if not match_over and maxi(net_my_wins, net_opp_wins) == NET_MATCH_TARGET - 1:
+			match_point_label.text = _t("match_point")
+			match_point_label.visible = true
+			_pulse(match_point_label)
 		award_label.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
 		_update_top_bar()
 		_show_panel(round_panel)
-		if _net_is_host():
-			get_tree().create_timer(2.4).timeout.connect(_net_host_next_round)
+		get_tree().create_timer(2.4).timeout.connect(_net_after_round)
 		return
 	var opp: Dictionary = OPPONENTS[duel_index]
 	if player_wins:
 		_play_sfx(SND_WIN, -3.0, 0.02)
 		round_label.text = _t("round_win")
 		round_label.add_theme_color_override("font_color", PLAYER_COLOR)
-		var award_count: int = _rng.randi_range(1, 2)
-		var awarded: Array[String] = []
-		var keys: Array = MATERIAL_DEFS.keys()
-		for i: int in award_count:
-			var pick: String = keys[_rng.randi_range(0, keys.size() - 1)]
-			materials_owned[pick] += 1
-			awarded.append(String(MATERIAL_DEFS[pick].label))
-		award_label.text = _t("awarded") + ", ".join(awarded)
+		var counts: Dictionary = _grant_materials(_rng.randi_range(1, 2))
+		_show_award_icons(round_award_row, counts, "+%d")
+		mats_saved_label.text = _t("mats_saved")
+		mats_saved_label.visible = true
+		var wait: float = 2.4
+		var unlock_style: String = String(opp.mesh)
+		if not unlocked_styles.has(unlock_style):
+			unlocked_styles.append(unlock_style)
+			pending_unlock = unlock_style
+			unlock_label.text = _t("unlocked_title") + "\n" + _t("unlock_line") % String(opp.name)
+			unlock_label.add_theme_color_override("font_color", opp.get("color", PLAYER_COLOR))
+			unlock_label.visible = true
+			_pulse(unlock_label)
+			wait = 3.4
+		_save_workshop()
 		duel_index += 1
 		_update_top_bar()
-	else:
-		round_label.text = _t("round_lose") % opp.name
-		round_label.add_theme_color_override("font_color", FOE_COLOR)
-		award_label.text = _t("round_out")
+		_show_panel(round_panel)
+		get_tree().create_timer(wait).timeout.connect(_after_round.bind(player_wins))
+		return
+	round_label.text = _t("round_lose") % opp.name
+	round_label.add_theme_color_override("font_color", FOE_COLOR)
+	award_label.text = _t("round_out")
 	_show_panel(round_panel)
 	get_tree().create_timer(2.4).timeout.connect(_after_round.bind(player_wins))
+
+
+func _tally_match_mats(counts: Dictionary) -> void:
+	for mat_id: String in counts:
+		net_match_mats[mat_id] = int(net_match_mats.get(mat_id, 0)) + int(counts[mat_id])
+
+
+func _show_award_icons(row: HBoxContainer, counts: Dictionary, fmt: String) -> void:
+	for child: Node in row.get_children():
+		child.queue_free()
+	var i: int = 0
+	for mat_id: String in counts:
+		var cell: HBoxContainer = HBoxContainer.new()
+		cell.add_theme_constant_override("separation", 4)
+		var icon: TextureRect = TextureRect.new()
+		icon.texture = load("res://assets/icon_%s.png" % mat_id)
+		icon.custom_minimum_size = Vector2(36.0, 36.0)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		cell.add_child(icon)
+		cell.add_child(_mk_label(fmt % int(counts[mat_id]), 16))
+		# ponytail: staggered alpha pop instead of scale tween — no pivot bookkeeping
+		cell.modulate.a = 0.0
+		row.add_child(cell)
+		var tw: Tween = create_tween()
+		tw.tween_property(cell, "modulate:a", 1.0, 0.25).set_delay(0.1 + 0.08 * i)
+		i += 1
+
+
+func _reset_round_panel() -> void:
+	for child: Node in round_award_row.get_children():
+		child.queue_free()
+	mats_saved_label.visible = false
+	unlock_label.visible = false
+	unlock_label.modulate.a = 1.0
+	match_point_label.visible = false
+	match_point_label.modulate.a = 1.0
+	award_label.text = ""
+
+
+func _pulse(l: Label) -> void:
+	var tw: Tween = create_tween().set_loops(4)
+	tw.tween_property(l, "modulate:a", 0.35, 0.4)
+	tw.tween_property(l, "modulate:a", 1.0, 0.4)
 
 
 func _after_round(player_wins: bool) -> void:
@@ -737,24 +921,114 @@ func _after_round(player_wins: bool) -> void:
 func _finish_run(won: bool) -> void:
 	run_won = won
 	_play_sfx(SND_WIN if won else SND_LOSE, 0.0, 0.0)
+	_reset_over_panel()
 	over_title.text = _t("over_win") if won else _t("over_lose")
 	over_title.add_theme_color_override("font_color", PLAYER_COLOR if won else Color(1.0, 0.45, 0.3))
 	over_stats.text = _t("duels_won") % [duel_index, OPPONENTS.size()]
 	_enter_state(State.OVER)
 
 
-# ---------------------------------------------------------------- run / craft
+func _reset_over_panel() -> void:
+	for child: Node in over_award_row.get_children():
+		child.queue_free()
+	over_mats_title.visible = false
+	over_award_row.visible = false
+	over_bonus_label.visible = false
+	rematch_status.text = ""
+	rematch_status.visible = false
+	rematch_status.modulate.a = 1.0
+	restart_button.disabled = false
+
+
+# ---------------------------------------------------------------- run / workshop
 
 func _reset_run() -> void:
-	player_shapes = {}
-	for id: String in BASE_SHAPES:
-		var src: Dictionary = BASE_SHAPES[id]
-		player_shapes[id] = {"mass": src.mass, "spin_reserve": src.spin_reserve, "balance": src.balance}
-	materials_owned = {"merbau": 0, "kemuning": 0, "besi": 0}
 	duel_index = 0
-	selected_shape = "jantung"
 	run_won = false
 	last_striker = ""
+
+
+func _style_unlock_index(style_id: String) -> int:
+	for i: int in OPPONENTS.size():
+		if String(OPPONENTS[i].mesh) == style_id:
+			return i
+	return -1 # default style, never locked
+
+
+func _style_battle_stats(id: String) -> Dictionary:
+	var s: Dictionary = (player_shapes[id] as Dictionary).duplicate()
+	s["mesh"] = STYLE_DEFS[id].mesh
+	return s
+
+
+func _grant_materials(count: int) -> Dictionary:
+	var counts: Dictionary = {}
+	var keys: Array = MATERIAL_DEFS.keys()
+	for i: int in count:
+		var pick: String = keys[_rng.randi_range(0, keys.size() - 1)]
+		materials_owned[pick] += 1
+		counts[pick] = int(counts.get(pick, 0)) + 1
+	return counts
+
+
+func _mat_summary(counts: Dictionary) -> String:
+	var parts: Array[String] = []
+	for mat_id: String in counts:
+		var label: String = String(MATERIAL_DEFS[mat_id].label)
+		parts.append(label if int(counts[mat_id]) == 1 else "%s ×%d" % [label, counts[mat_id]])
+	return ", ".join(parts)
+
+
+func _load_workshop() -> void:
+	# defaults first — a missing/corrupt save degrades to a fresh workshop
+	unlocked_styles = DEFAULT_STYLES.duplicate()
+	materials_owned = {"merbau": 0, "kemuning": 0, "besi": 0}
+	player_shapes = {}
+	for id: String in STYLE_DEFS:
+		var d: Dictionary = STYLE_DEFS[id]
+		player_shapes[id] = {"mass": d.mass, "spin_reserve": d.spin_reserve, "balance": d.balance}
+	selected_shape = "jantung"
+	var cf: ConfigFile = ConfigFile.new()
+	if cf.load(SAVE_PATH) != OK:
+		return
+	var u: Variant = cf.get_value("workshop", "unlocked", [])
+	if u is Array:
+		for id: Variant in u:
+			if STYLE_DEFS.has(id) and not unlocked_styles.has(String(id)):
+				unlocked_styles.append(String(id))
+	var m: Variant = cf.get_value("workshop", "materials", {})
+	if m is Dictionary:
+		for k: String in materials_owned:
+			var v: Variant = (m as Dictionary).get(k, 0)
+			if v is int or v is float:
+				materials_owned[k] = maxi(int(v), 0)
+	var s: Variant = cf.get_value("workshop", "shapes", {})
+	if s is Dictionary:
+		for id: String in player_shapes:
+			var sv: Variant = (s as Dictionary).get(id)
+			if sv is Dictionary:
+				var mass_v: Variant = (sv as Dictionary).get("mass")
+				var bal_v: Variant = (sv as Dictionary).get("balance")
+				if mass_v is float or mass_v is int:
+					player_shapes[id].mass = clampf(float(mass_v), 1.4, 3.0)
+				if bal_v is float or bal_v is int:
+					player_shapes[id].balance = clampf(float(bal_v), 55.0, 85.0)
+				# spin_reserve deliberately NOT loaded — always the style base
+	var sel: String = String(cf.get_value("workshop", "selected", "jantung"))
+	if STYLE_DEFS.has(sel) and unlocked_styles.has(sel):
+		selected_shape = sel
+
+
+func _save_workshop() -> void:
+	if _netbot:
+		return # two local netbot instances share user:// — don't clobber the real save
+	var cf: ConfigFile = ConfigFile.new()
+	cf.set_value("workshop", "version", 1)
+	cf.set_value("workshop", "unlocked", unlocked_styles)
+	cf.set_value("workshop", "selected", selected_shape)
+	cf.set_value("workshop", "materials", materials_owned)
+	cf.set_value("workshop", "shapes", player_shapes)
+	cf.save(SAVE_PATH) # ignore error; non-fatal
 
 
 func _restart_run() -> void:
@@ -764,7 +1038,18 @@ func _restart_run() -> void:
 
 func _on_restart_pressed() -> void:
 	if net_active:
-		_net_teardown()
+		if net_ended:
+			_net_teardown() # disconnect screen: the button is BACK TO MENU
+			return
+		if net_rematch_sent:
+			return
+		net_rematch_sent = true
+		restart_button.disabled = true
+		rematch_status.text = _t("rematch_wait") % net_opp_name
+		rematch_status.visible = true
+		_pulse(rematch_status)
+		_net_rematch_ready.rpc()
+		_maybe_start_rematch()
 		return
 	_restart_run()
 
@@ -797,9 +1082,15 @@ func _on_lang_pressed(code: String) -> void:
 
 
 func _on_shape_selected(id: String) -> void:
+	if not unlocked_styles.has(id):
+		var idx: int = _style_unlock_index(id)
+		craft_info.text = _t("locked_info") % (String(OPPONENTS[idx].name) if idx >= 0 else "")
+		return
 	selected_shape = id
-	craft_info.text = _t("selected_info") % BASE_SHAPES[id].label
+	craft_info.text = _t("selected_info") % String(STYLE_DEFS[id].label)
+	_save_workshop()
 	_refresh_craft()
+	_update_workshop_preview()
 
 
 func _on_material_pressed(mat_id: String) -> void:
@@ -811,7 +1102,8 @@ func _on_material_pressed(mat_id: String) -> void:
 	var stats: Dictionary = player_shapes[selected_shape]
 	stats.mass = clampf(stats.mass + def.mass, 1.4, 3.0)
 	stats.balance = clampf(stats.balance + def.balance, 55.0, 85.0)
-	craft_info.text = _t("forged") % [def.label, BASE_SHAPES[selected_shape].label]
+	craft_info.text = _t("forged") % [def.label, STYLE_DEFS[selected_shape].label]
+	_save_workshop()
 	_refresh_craft()
 
 
@@ -912,8 +1204,13 @@ func _show_panel(target: Control) -> void:
 
 
 func _update_top_bar() -> void:
+	score_row.visible = net_active
 	if net_active:
-		duel_label.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
+		duel_label.text = _t("vs_line") % net_opp_name
+		my_pips.wins = net_my_wins
+		opp_pips.wins = net_opp_wins
+		my_pips.queue_redraw()
+		opp_pips.queue_redraw()
 	else:
 		var opp: Dictionary = OPPONENTS[mini(duel_index, OPPONENTS.size() - 1)]
 		duel_label.text = _t("duel_line") % [mini(duel_index + 1, OPPONENTS.size()), OPPONENTS.size(), opp.name]
@@ -951,10 +1248,10 @@ func _apply_language() -> void:
 	invite_button.text = _t("invite_friend")
 	wait_cancel_button.text = _t("cancel")
 	over_menu_button.text = _t("back_menu")
+	craft_sub.text = _t("first_to_3")
 	for id: String in shape_cards:
 		var card: Dictionary = shape_cards[id]
-		var role: Label = card.role
-		role.text = _t("role_" + id)
+		# role text is owned by _refresh_craft (locked hint vs role line)
 		var stat_labels: Array = card.stat_labels
 		var names: Array = ["stat_mass", "stat_spin", "stat_balance"]
 		for i: int in stat_labels.size():
@@ -1038,29 +1335,44 @@ func _mk_fullrect_center() -> CenterContainer:
 	return c
 
 
-func _mk_stat_row(parent: Container, fill_color: Color) -> Dictionary:
+func _mk_stat_row(parent: Container, fill_color: Color, layered: bool = false) -> Dictionary:
 	var row: HBoxContainer = HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var lbl: Label = _mk_label("", 13)
-	lbl.custom_minimum_size = Vector2(84.0, 0.0)
+	lbl.custom_minimum_size = Vector2(70.0, 0.0)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	row.add_child(lbl)
 	var bar: ProgressBar = ProgressBar.new()
 	bar.max_value = 1.0
 	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(150.0, 14.0)
+	bar.custom_minimum_size = Vector2(130.0, 14.0)
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var bg: StyleBoxFlat = StyleBoxFlat.new()
 	bg.bg_color = Color(0.0, 0.0, 0.0, 0.5)
 	bg.set_corner_radius_all(4)
 	bar.add_theme_stylebox_override("background", bg)
 	var fill: StyleBoxFlat = StyleBoxFlat.new()
-	fill.bg_color = fill_color
+	# layered: bottom bar shows the forged total in a brighter tint; the overlay
+	# draws the base on top, so the bright sliver past it reads as forged bonus
+	fill.bg_color = fill_color.lightened(0.5) if layered else fill_color
 	fill.set_corner_radius_all(4)
 	bar.add_theme_stylebox_override("fill", fill)
+	var over: ProgressBar = null
+	if layered:
+		over = ProgressBar.new()
+		over.max_value = 1.0
+		over.show_percentage = false
+		over.set_anchors_preset(Control.PRESET_FULL_RECT)
+		over.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		over.add_theme_stylebox_override("background", StyleBoxEmpty.new())
+		var ofill: StyleBoxFlat = StyleBoxFlat.new()
+		ofill.bg_color = fill_color
+		ofill.set_corner_radius_all(4)
+		over.add_theme_stylebox_override("fill", ofill)
+		bar.add_child(over)
 	row.add_child(bar)
 	parent.add_child(row)
-	return {"label": lbl, "bar": bar}
+	return {"label": lbl, "bar": bar, "over": over}
 
 
 func _build_ui() -> void:
@@ -1090,6 +1402,19 @@ func _build_ui() -> void:
 	duel_label = _mk_label("", 22, PLAYER_COLOR)
 	mats_label = _mk_label("", 14)
 	center_box.add_child(duel_label)
+	score_row = HBoxContainer.new()
+	score_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	score_row.add_theme_constant_override("separation", 16)
+	score_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	score_row.visible = false
+	my_pips = ScorePips.new()
+	my_pips.color = PLAYER_COLOR
+	score_row.add_child(my_pips)
+	opp_pips = ScorePips.new()
+	opp_pips.color = FOE_COLOR
+	opp_pips.rtl = true # mirrored so both scores grow toward the center
+	score_row.add_child(opp_pips)
+	center_box.add_child(score_row)
 	center_box.add_child(mats_label)
 	top_bar.add_child(center_box)
 	var spacer2: Control = Control.new()
@@ -1407,35 +1732,47 @@ func _on_mp_cancel_pressed() -> void:
 
 func _build_craft_panel() -> void:
 	craft_panel = _mk_fullrect_center()
+	craft_panel.offset_right = -240.0 # leave a strip of arena visible for the 3D preview
 	var box: PanelContainer = _mk_panel_box()
 	craft_panel.add_child(box)
 	var v: VBoxContainer = VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
+	v.add_theme_constant_override("separation", 8)
 	box.add_child(v)
 	craft_title = _mk_label("", 30, PLAYER_COLOR)
 	v.add_child(craft_title)
 	craft_duel_label = _mk_label("", 16)
 	v.add_child(craft_duel_label)
+	craft_sub = _mk_label("", 13, Color(0.75, 0.66, 0.52))
+	craft_sub.visible = false
+	v.add_child(craft_sub)
 
-	var cards: HBoxContainer = HBoxContainer.new()
-	cards.add_theme_constant_override("separation", 16)
-	cards.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_child(cards)
-	for id: String in BASE_SHAPES:
-		var def: Dictionary = BASE_SHAPES[id]
+	var cards: GridContainer = GridContainer.new()
+	cards.columns = 3
+	cards.add_theme_constant_override("h_separation", 12)
+	cards.add_theme_constant_override("v_separation", 12)
+	var cards_wrap: CenterContainer = CenterContainer.new()
+	cards_wrap.add_child(cards)
+	v.add_child(cards_wrap)
+	for id: String in STYLE_DEFS:
+		var def: Dictionary = STYLE_DEFS[id]
 		var card: PanelContainer = _mk_panel_box()
+		var csb: StyleBoxFlat = card.get_theme_stylebox("panel") as StyleBoxFlat
+		csb.content_margin_left = 12.0
+		csb.content_margin_right = 12.0
+		csb.content_margin_top = 10.0
+		csb.content_margin_bottom = 10.0
 		cards.add_child(card)
 		var cv: VBoxContainer = VBoxContainer.new()
-		cv.add_theme_constant_override("separation", 6)
+		cv.add_theme_constant_override("separation", 5)
 		card.add_child(cv)
 		var pick: Button = _mk_button(def.label, Color(0.82, 0.6, 0.24))
 		pick.pressed.connect(_on_shape_selected.bind(id))
 		cv.add_child(pick)
 		var role: Label = _mk_label("", 12, Color(0.78, 0.7, 0.56))
 		cv.add_child(role)
-		var mass_row: Dictionary = _mk_stat_row(cv, Color(0.85, 0.45, 0.25))
-		var spin_row: Dictionary = _mk_stat_row(cv, Color(0.35, 0.75, 0.9))
-		var bal_row: Dictionary = _mk_stat_row(cv, Color(0.5, 0.85, 0.4))
+		var mass_row: Dictionary = _mk_stat_row(cv, Color(0.85, 0.45, 0.25), true)
+		var spin_row: Dictionary = _mk_stat_row(cv, Color(0.35, 0.75, 0.9), true)
+		var bal_row: Dictionary = _mk_stat_row(cv, Color(0.5, 0.85, 0.4), true)
 		shape_cards[id] = {
 			"card": card,
 			"pick": pick,
@@ -1443,6 +1780,9 @@ func _build_craft_panel() -> void:
 			"mass": mass_row.bar,
 			"spin_reserve": spin_row.bar,
 			"balance": bal_row.bar,
+			"mass_over": mass_row.over,
+			"spin_over": spin_row.over,
+			"bal_over": bal_row.over,
 			"stat_labels": [mass_row.label, spin_row.label, bal_row.label],
 		}
 
@@ -1463,6 +1803,8 @@ func _build_craft_panel() -> void:
 
 	craft_info = _mk_label("", 14, Color(0.85, 0.8, 0.65))
 	v.add_child(craft_info)
+	craft_opp_status = _mk_label("", 14, FOE_COLOR)
+	v.add_child(craft_opp_status)
 	fight_button = _mk_button("", PLAYER_COLOR)
 	fight_button.add_theme_font_size_override("font_size", 22)
 	fight_button.pressed.connect(_on_fight_pressed)
@@ -1479,8 +1821,21 @@ func _build_round_panel() -> void:
 	v.add_theme_constant_override("separation", 10)
 	box.add_child(v)
 	round_label = _mk_label("", 34, PLAYER_COLOR)
-	award_label = _mk_label("", 18)
 	v.add_child(round_label)
+	round_award_row = HBoxContainer.new()
+	round_award_row.add_theme_constant_override("separation", 14)
+	round_award_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_child(round_award_row)
+	mats_saved_label = _mk_label("", 13, Color(0.75, 0.66, 0.52))
+	mats_saved_label.visible = false
+	v.add_child(mats_saved_label)
+	unlock_label = _mk_label("", 20, PLAYER_COLOR)
+	unlock_label.visible = false
+	v.add_child(unlock_label)
+	match_point_label = _mk_label("", 20, Color(1.0, 0.45, 0.3))
+	match_point_label.visible = false
+	v.add_child(match_point_label)
+	award_label = _mk_label("", 18)
 	v.add_child(award_label)
 
 
@@ -1495,6 +1850,17 @@ func _build_over_panel() -> void:
 	over_stats = _mk_label("", 18)
 	v.add_child(over_title)
 	v.add_child(over_stats)
+	over_mats_title = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	over_mats_title.visible = false
+	v.add_child(over_mats_title)
+	over_award_row = HBoxContainer.new()
+	over_award_row.add_theme_constant_override("separation", 14)
+	over_award_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	over_award_row.visible = false
+	v.add_child(over_award_row)
+	over_bonus_label = _mk_label("", 14, PLAYER_COLOR)
+	over_bonus_label.visible = false
+	v.add_child(over_bonus_label)
 	restart_button = _mk_button("", PLAYER_COLOR)
 	restart_button.name = "RestartButton"
 	restart_button.add_theme_font_size_override("font_size", 20)
@@ -1507,16 +1873,20 @@ func _build_over_panel() -> void:
 	var om_wrap: CenterContainer = CenterContainer.new()
 	om_wrap.add_child(over_menu_button)
 	v.add_child(om_wrap)
+	rematch_status = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	rematch_status.visible = false
+	v.add_child(rematch_status)
 	over_hint = _mk_label("", 13, Color(0.75, 0.66, 0.52))
 	v.add_child(over_hint)
 
 
 func _refresh_craft() -> void:
 	if net_active:
-		craft_duel_label.text = _t("vs_line") % net_opp_name
+		craft_duel_label.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
 	else:
 		var opp: Dictionary = OPPONENTS[mini(duel_index, OPPONENTS.size() - 1)]
 		craft_duel_label.text = _t("craft_duel_line") % [mini(duel_index + 1, OPPONENTS.size()), OPPONENTS.size(), opp.name]
+	craft_sub.visible = net_active
 	for mat_id: String in MATERIAL_DEFS:
 		var mb: Button = material_buttons[mat_id]
 		var def: Dictionary = MATERIAL_DEFS[mat_id]
@@ -1524,14 +1894,33 @@ func _refresh_craft() -> void:
 	for id: String in shape_cards:
 		var card: Dictionary = shape_cards[id]
 		var stats: Dictionary = player_shapes[id]
+		var base: Dictionary = STYLE_DEFS[id]
+		var locked: bool = not unlocked_styles.has(id)
 		_tween_bar(card.mass, (stats.mass - 1.4) / 1.6)
 		_tween_bar(card.spin_reserve, (stats.spin_reserve - 60.0) / 50.0)
 		_tween_bar(card.balance, (stats.balance - 55.0) / 30.0)
-		var panel: PanelContainer = card.card
-		panel.modulate = Color(1.0, 1.0, 1.0, 1.0) if id == selected_shape else Color(0.68, 0.68, 0.68, 1.0)
+		_tween_bar(card.mass_over, (base.mass - 1.4) / 1.6)
+		_tween_bar(card.spin_over, (base.spin_reserve - 60.0) / 50.0)
+		_tween_bar(card.bal_over, (base.balance - 55.0) / 30.0)
+		var role: Label = card.role
+		if locked:
+			var idx: int = _style_unlock_index(id)
+			role.text = _t("locked_hint") % (String(OPPONENTS[idx].name) if idx >= 0 else "")
+			role.add_theme_color_override("font_color", Color(0.85, 0.55, 0.3))
+		else:
+			role.text = _t("role_" + id)
+			role.add_theme_color_override("font_color", Color(0.78, 0.7, 0.56))
 		var pick: Button = card.pick
+		pick.disabled = locked
+		var panel: PanelContainer = card.card
+		if locked:
+			panel.modulate = Color(0.42, 0.42, 0.42, 1.0)
+		elif id == selected_shape:
+			panel.modulate = Color(1.0, 1.0, 1.0, 1.0)
+		else:
+			panel.modulate = Color(0.68, 0.68, 0.68, 1.0)
 		var prefix: String = "> " if id == selected_shape else ""
-		pick.text = prefix + String(BASE_SHAPES[id].label)
+		pick.text = prefix + String(STYLE_DEFS[id].label)
 
 
 func _tween_bar(bar: ProgressBar, value: float) -> void:
@@ -1572,13 +1961,17 @@ func _net_setup() -> void:
 	net_my_wins = 0
 	net_opp_wins = 0
 	net_client_nudge_cd = 0.0
+	net_rematch_sent = false
+	net_opp_rematch = false
+	net_bonus_text = ""
+	net_match_mats = {}
 	net_opp_name = ""
 	for pd: PlayerData in Online.players.values():
 		if pd.multiplayer_id != multiplayer.get_unique_id():
 			net_opp_name = pd.display_name
 			break # first non-self entry (host sorts first); ignore any stale duplicates
 	_reset_run()
-	materials_owned = {"merbau": 1, "kemuning": 1, "besi": 1} # fixed symmetric MP budget, no awards
+	# MP fights with the persistent workshop build + materials, same as SP
 	foe_gauge.title = net_opp_name
 	foe_gauge.ring_color = FOE_COLOR
 
@@ -1589,9 +1982,35 @@ func _net_start_match() -> void:
 	_enter_state(State.CRAFT)
 
 
+func _net_sanitize_config(cfg: Dictionary) -> Dictionary:
+	# The host simulates everything (clients are puppets), so clamping here is the
+	# entire anti-cheat boundary: a modded client can at worst field a maximally
+	# forged LEGAL build. Both peers sanitize for display consistency.
+	var style: String = String(cfg.get("shape", "jantung"))
+	if not STYLE_DEFS.has(style):
+		style = "jantung"
+	var def: Dictionary = STYLE_DEFS[style]
+	var raw: Variant = cfg.get("stats")
+	var in_stats: Dictionary = raw if raw is Dictionary else {}
+	var mass_v: Variant = in_stats.get("mass", def.mass)
+	var bal_v: Variant = in_stats.get("balance", def.balance)
+	return {
+		"name": String(cfg.get("name", net_opp_name)),
+		"shape": style,
+		"stats": {
+			"mass": clampf(float(mass_v) if (mass_v is float or mass_v is int) else float(def.mass), 1.4, 3.0),
+			"balance": clampf(float(bal_v) if (bal_v is float or bal_v is int) else float(def.balance), 55.0, 85.0),
+			"spin_reserve": def.spin_reserve, # not forgeable — always the style base
+			"mesh": def.mesh, # derived, never client-supplied
+		},
+	}
+
+
 @rpc("any_peer", "reliable")
 func _net_craft_ready(cfg: Dictionary) -> void:
-	net_opp_config = cfg
+	net_opp_config = _net_sanitize_config(cfg)
+	if state == State.CRAFT and not net_ready_sent:
+		craft_opp_status.text = _t("opp_ready") % net_opp_name
 	if net_ready_sent and state == State.CRAFT:
 		_enter_state(State.WIND)
 
@@ -1707,9 +2126,51 @@ func _net_round_over(host_reason: String, cli_reason: String, host_wins: bool) -
 	_apply_round_result(my_reason, opp_reason, i_win)
 
 
-func _net_host_next_round() -> void:
-	if net_active and not net_ended and state == State.ROUND_OVER:
+func _net_after_round() -> void:
+	if not net_active or net_ended or state != State.ROUND_OVER:
+		return
+	if net_my_wins >= NET_MATCH_TARGET or net_opp_wins >= NET_MATCH_TARGET:
+		# win counters are mirrored on both peers (reliable call_local round RPC),
+		# so the match end is deterministic locally — no extra RPC needed
+		_net_finish_match()
+	elif _net_is_host():
 		_net_next_round.rpc()
+
+
+func _net_finish_match() -> void:
+	var i_won: bool = net_my_wins >= NET_MATCH_TARGET
+	if _netbot:
+		print("netbot: match over %d-%d vs %s" % [net_my_wins, net_opp_wins, net_opp_name])
+	_play_sfx(SND_WIN if i_won else SND_LOSE, 0.0, 0.0)
+	_reset_over_panel()
+	over_title.text = _t("match_win") if i_won else _t("match_lose") % net_opp_name
+	over_title.add_theme_color_override("font_color", PLAYER_COLOR if i_won else Color(1.0, 0.45, 0.3))
+	over_stats.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
+	if not net_match_mats.is_empty():
+		over_mats_title.text = _t("match_mats")
+		over_mats_title.visible = true
+		over_award_row.visible = true
+		_show_award_icons(over_award_row, net_match_mats, "×%d")
+	if i_won and not net_bonus_text.is_empty():
+		over_bonus_label.text = net_bonus_text
+		over_bonus_label.visible = true
+	restart_button.text = _t("rematch")
+	_enter_state(State.OVER)
+
+
+@rpc("any_peer", "reliable")
+func _net_rematch_ready() -> void:
+	net_opp_rematch = true
+	if not net_rematch_sent and state == State.OVER:
+		rematch_status.text = _t("rematch_offer") % net_opp_name
+		rematch_status.visible = true
+		_pulse(rematch_status)
+	_maybe_start_rematch()
+
+
+func _maybe_start_rematch() -> void:
+	if _net_is_host() and net_rematch_sent and net_opp_rematch:
+		_net_start_match.rpc() # _net_setup zeroes wins/flags -> CRAFT
 
 
 @rpc("authority", "reliable", "call_local")
@@ -1729,6 +2190,10 @@ func _net_teardown() -> void:
 	net_opp_wind_in = false
 	net_my_wins = 0
 	net_opp_wins = 0
+	net_rematch_sent = false
+	net_opp_rematch = false
+	net_bonus_text = ""
+	net_match_mats = {}
 	net_opp_name = ""
 	net_active = false
 	_reset_run()
@@ -1740,7 +2205,7 @@ func _on_mp_joined_lobby() -> void:
 	if Online.is_host:
 		return # host UI is driven by its own button handlers
 	if state != State.READY:
-		_reset_run() # abort the SP run for real — stale duel/materials must not resume later
+		_reset_run() # abort the SP run for real — stale duel progress must not resume later (workshop persists)
 		_enter_state(State.READY) # Steam invite accepted mid-run aborts the run
 	_show_menu_screen(MenuScreen.WAIT)
 	_set_wait_status(_t("connecting"), "", false)
@@ -1819,6 +2284,9 @@ func _netbot_tick(delta: float) -> void:
 			elif wind_power >= 55.0:
 				winding = false
 				_net_release_wind()
+		State.OVER:
+			if not net_ended and not net_rematch_sent:
+				_on_restart_pressed() # auto-rematch so soak tests loop; disconnect screen is left alone
 
 
 func _handle_mp_loss(msg: String) -> void:
@@ -1830,6 +2298,7 @@ func _handle_mp_loss(msg: String) -> void:
 	elif net_active and not net_ended:
 		net_ended = true # keep net_active true so no SP branch (AI) wakes up mid-teardown
 		Online.leave_lobby()
+		_reset_over_panel() # clears any rematch-wait state; banked rewards are already saved
 		over_title.text = _t("opp_left")
 		over_title.add_theme_color_override("font_color", Color(1.0, 0.45, 0.3))
 		over_stats.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
@@ -1838,6 +2307,29 @@ func _handle_mp_loss(msg: String) -> void:
 
 
 # ---------------------------------------------------------------- widgets
+
+class ScorePips:
+	extends Control
+
+	var wins: int = 0
+	var total: int = 3
+	var color: Color = Color.WHITE
+	var rtl: bool = false # mirrored fill so both players' pips grow toward the center
+
+	func _ready() -> void:
+		custom_minimum_size = Vector2(total * 22.0, 18.0)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		# drawn circles, not "●○" text — default-font glyph coverage isn't guaranteed
+		for i: int in total:
+			var idx: int = total - 1 - i if rtl else i
+			var center: Vector2 = Vector2(11.0 + i * 22.0, 9.0)
+			if idx < wins:
+				draw_circle(center, 7.0, color)
+			else:
+				draw_arc(center, 7.0, 0.0, TAU, 24, Color(1.0, 1.0, 1.0, 0.25), 2.0, true)
+
 
 class SpinGauge:
 	extends Control

@@ -573,32 +573,32 @@ visible = false
 mesh = SubResource("TorusMesh_ig7tw")
 surface_material_override/0 = SubResource("StandardMaterial3D_0xm2m")
 
-[node name="Environment3D" type="Node3D" parent="." unique_id=166615196 instance=ExtResource("2_0xm2m")]
+[node name="Environment3D" parent="." unique_id=166615196 instance=ExtResource("2_0xm2m")]
 
-[node name="EnvPalms" type="MeshInstance3D" parent="Environment3D" unique_id=1641786622]
+[node name="EnvPalms2" type="MeshInstance3D" parent="Environment3D" unique_id=1641786622]
 mesh = SubResource("ArrayMesh_1bngu")
 
-[node name="EnvHouses" type="MeshInstance3D" parent="Environment3D" unique_id=731732903]
+[node name="EnvHouses2" type="MeshInstance3D" parent="Environment3D" unique_id=731732903]
 mesh = SubResource("ArrayMesh_syfuq")
 
-[node name="EnvFence" type="MeshInstance3D" parent="Environment3D" unique_id=1826836665]
+[node name="EnvFence2" type="MeshInstance3D" parent="Environment3D" unique_id=1826836665]
 mesh = SubResource("ArrayMesh_k1wmn")
 
-[node name="EnvRocks" type="MeshInstance3D" parent="Environment3D" unique_id=1327855193]
+[node name="EnvRocks2" type="MeshInstance3D" parent="Environment3D" unique_id=1327855193]
 mesh = SubResource("ArrayMesh_44gy4")
 
-[node name="EnvBushes" type="MeshInstance3D" parent="Environment3D" unique_id=786204772]
+[node name="EnvBushes2" type="MeshInstance3D" parent="Environment3D" unique_id=786204772]
 mesh = SubResource("ArrayMesh_mdt04")
 
-[node name="EnvBanners" type="MeshInstance3D" parent="Environment3D" unique_id=2002841762]
+[node name="EnvBanners2" type="MeshInstance3D" parent="Environment3D" unique_id=2002841762]
 mesh = SubResource("ArrayMesh_ebj1v")
 
-[node name="EnvLanterns" type="MeshInstance3D" parent="Environment3D" unique_id=1332068199]
+[node name="EnvLanterns2" type="MeshInstance3D" parent="Environment3D" unique_id=1332068199]
 mesh = SubResource("ArrayMesh_3ggre")
 
-[node name="EnvEarth" type="MeshInstance3D" parent="Environment3D" unique_id=884846931]
+[node name="EnvEarth2" type="MeshInstance3D" parent="Environment3D" unique_id=884846931]
 mesh = SubResource("ArrayMesh_4yv2o")
 
-[node name="EnvRail" type="MeshInstance3D" parent="Environment3D" unique_id=1105844464]
+[node name="EnvRail2" type="MeshInstance3D" parent="Environment3D" unique_id=1105844464]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, 0)
 mesh = SubResource("ArrayMesh_vd3rg")
