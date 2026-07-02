@@ -65,6 +65,9 @@ const STRINGS: Dictionary = {
 		"stat_spin": "Spin",
 		"stat_balance": "Balance",
 		"meter": "WIND",
+		"tip_merbau": "Merbau — dense heartwood.\n+0.3 Mass: your strikes shove rivals harder\nand this top resists knockback.",
+		"tip_kemuning": "Kemuning — fine golden wood.\n+7 Balance: wobbles later as spin fades\nand resists toppling when struck.",
+		"tip_besi": "Besi — a heavy iron core.\n+0.5 Mass: much harder pangkah strikes.",
 	},
 	"ms": {
 		"heritage": "Permainan warisan Melayu — pusing gasingmu, pangkah lawan, jadi juara gelanggang.",
@@ -106,6 +109,9 @@ const STRINGS: Dictionary = {
 		"stat_spin": "Pusingan",
 		"stat_balance": "Imbangan",
 		"meter": "PUSING",
+		"tip_merbau": "Merbau — teras kayu padat.\n+0.3 Jisim: pangkah anda lebih kuat\ndan gasing lebih tahan tolakan.",
+		"tip_kemuning": "Kemuning — kayu halus keemasan.\n+7 Imbangan: lambat goyang bila pusingan susut\ndan tahan tumbang bila dipangkah.",
+		"tip_besi": "Besi — teras besi berat.\n+0.5 Jisim: pangkah jauh lebih kuat.",
 	},
 }
 
@@ -599,6 +605,9 @@ func _apply_language() -> void:
 		for i: int in stat_labels.size():
 			var lbl: Label = stat_labels[i]
 			lbl.text = _t(names[i])
+	for mat_id: String in material_buttons:
+		var mb: Button = material_buttons[mat_id]
+		mb.tooltip_text = _t("tip_" + mat_id)
 	for code: String in lang_buttons:
 		var b: Button = lang_buttons[code]
 		b.modulate = Color(1.0, 1.0, 1.0, 1.0) if code == lang else Color(0.55, 0.55, 0.55, 1.0)
@@ -830,6 +839,9 @@ func _build_craft_panel() -> void:
 	v.add_child(mats_row)
 	for mat_id: String in MATERIAL_DEFS:
 		var mb: Button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+		mb.icon = load("res://assets/icon_%s.png" % mat_id)
+		mb.add_theme_constant_override("icon_max_width", 44)
+		mb.add_theme_constant_override("h_separation", 8)
 		mb.pressed.connect(_on_material_pressed.bind(mat_id))
 		mats_row.add_child(mb)
 		material_buttons[mat_id] = mb
