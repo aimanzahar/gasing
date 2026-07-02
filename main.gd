@@ -22,10 +22,10 @@ const MATERIAL_DEFS: Dictionary = {
 	"besi": {"label": "Teras Besi", "mass": 0.5, "balance": 0.0},
 }
 const OPPONENTS: Array[Dictionary] = [
-	{"name": "Pak Din", "shape": "uri", "mass": 1.5, "spin_reserve": 88.0, "balance": 66.0, "wind_mean": 72.0, "wind_dev": 14.0, "aggressive": false},
-	{"name": "Cik Ros", "shape": "jantung", "mass": 2.2, "spin_reserve": 70.0, "balance": 62.0, "wind_mean": 82.0, "wind_dev": 9.0, "aggressive": true},
-	{"name": "Tok Gayong", "shape": "jantung", "mass": 2.7, "spin_reserve": 76.0, "balance": 68.0, "wind_mean": 86.0, "wind_dev": 6.0, "aggressive": true},
-	{"name": "Datuk Pangkah", "shape": "jantung", "mass": 2.9, "spin_reserve": 82.0, "balance": 74.0, "wind_mean": 90.0, "wind_dev": 3.5, "aggressive": true},
+	{"name": "Pak Din", "shape": "uri", "mesh": "pakdin", "color": Color(0.2, 0.85, 0.8), "mass": 1.5, "spin_reserve": 88.0, "balance": 66.0, "wind_mean": 72.0, "wind_dev": 14.0, "aggressive": false},
+	{"name": "Cik Ros", "shape": "jantung", "mesh": "cikros", "color": Color(0.95, 0.35, 0.65), "mass": 2.2, "spin_reserve": 70.0, "balance": 62.0, "wind_mean": 82.0, "wind_dev": 9.0, "aggressive": true},
+	{"name": "Tok Gayong", "shape": "jantung", "mesh": "tokgayong", "color": Color(1.0, 0.45, 0.1), "mass": 2.7, "spin_reserve": 76.0, "balance": 68.0, "wind_mean": 86.0, "wind_dev": 6.0, "aggressive": true},
+	{"name": "Datuk Pangkah", "shape": "jantung", "mesh": "datuk", "color": Color(0.65, 0.35, 1.0), "mass": 2.9, "spin_reserve": 82.0, "balance": 74.0, "wind_mean": 90.0, "wind_dev": 3.5, "aggressive": true},
 ]
 
 const STRINGS: Dictionary = {
@@ -321,7 +321,7 @@ func _spawn_top(is_player: bool) -> Gasing:
 		g.position = Vector3(0.0, 0.0, 3.0)
 	else:
 		var opp: Dictionary = OPPONENTS[duel_index]
-		g.setup(opp.name, opp.shape, opp, FOE_COLOR)
+		g.setup(opp.name, opp.shape, opp, opp.get("color", FOE_COLOR))
 		g.position = Vector3(0.0, 0.0, -3.0)
 	return g
 
@@ -334,6 +334,7 @@ func _do_launch() -> void:
 	if wind_power > 95.0:
 		_toast(_t("toast_snap"), Color(1.0, 0.35, 0.25), Vector3(0.0, 0.5, 3.0), true)
 	foe_top = _spawn_top(false)
+	foe_gauge.ring_color = foe_top.accent_color
 	var opp: Dictionary = OPPONENTS[duel_index]
 	var foe_wind: float = clampf(_rng.randfn(opp.wind_mean, opp.wind_dev), 5.0, 100.0)
 	var foe_eff: float = _wind_effectiveness(foe_wind)

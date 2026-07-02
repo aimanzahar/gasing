@@ -9,6 +9,7 @@ const RIM_CLIMB_SPEED: float = 1.7
 
 var display_name: String = "Gasing"
 var shape_id: String = "jantung"
+var mesh_id: String = "jantung"
 var mass: float = 2.4
 var spin_reserve: float = 70.0
 var balance: float = 60.0
@@ -48,6 +49,7 @@ func setup(p_name: String, p_shape: String, stats: Dictionary, p_accent: Color) 
 	spin_reserve = stats.get("spin_reserve", 80.0)
 	balance = stats.get("balance", 70.0)
 	accent_color = p_accent
+	mesh_id = String(stats.get("mesh", p_shape))
 	radius = 0.56 if shape_id == "uri" else 0.44
 	_rng.randomize()
 	_build_visual()
@@ -56,7 +58,7 @@ func setup(p_name: String, p_shape: String, stats: Dictionary, p_accent: Color) 
 func _build_visual() -> void:
 	for child: Node in _visual.get_children():
 		child.queue_free()
-	var packed: PackedScene = load("res://assets/gasing_%s.glb" % shape_id)
+	var packed: PackedScene = load("res://assets/gasing_%s.glb" % mesh_id)
 	var inst: Node3D = packed.instantiate() as Node3D
 	_visual.add_child(inst)
 	_spin_node = inst
