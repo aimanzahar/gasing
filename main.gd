@@ -3,6 +3,21 @@ extends Node3D
 enum State { READY, CRAFT, WIND, LAUNCH, BATTLE, ROUND_OVER, OVER }
 
 const GASING_SCENE: PackedScene = preload("res://gasing.tscn")
+const CLASH_SOUNDS: Array[AudioStream] = [
+	preload("res://assets/audio/impactWood_heavy_000.ogg"),
+	preload("res://assets/audio/impactWood_heavy_001.ogg"),
+	preload("res://assets/audio/impactWood_heavy_002.ogg"),
+	preload("res://assets/audio/impactWood_heavy_003.ogg"),
+	preload("res://assets/audio/impactWood_heavy_004.ogg"),
+]
+const SND_BIG_HIT: AudioStream = preload("res://assets/audio/impactPlank_medium_000.ogg")
+const SND_TOPPLE: AudioStream = preload("res://assets/audio/impactSoft_heavy_001.ogg")
+const SND_RINGOUT: AudioStream = preload("res://assets/audio/impactWood_light_002.ogg")
+const SND_LAUNCH: AudioStream = preload("res://assets/audio/pluck_002.ogg")
+const SND_WIN: AudioStream = preload("res://assets/audio/confirmation_002.ogg")
+const SND_LOSE: AudioStream = preload("res://assets/audio/error_008.ogg")
+const SND_CLICK: AudioStream = preload("res://assets/audio/click_002.ogg")
+const SND_NUDGE: AudioStream = preload("res://assets/audio/click_004.ogg")
 const NUDGE_POWER: float = 2.4
 const MAX_IMPULSE: float = 6.0
 const NUDGE_SPIN_COST: float = 2.0
@@ -137,6 +152,8 @@ var hit_cooldown: float = 0.0
 var nudge_cooldown: float = 0.0
 var ai_think_timer: float = 1.0
 var _marker_tween: Tween = null
+var _sfx_pool: Array[AudioStreamPlayer] = []
+var _sfx_index: int = 0
 var last_striker: String = ""
 var last_wind_effectiveness: float = 0.0
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -180,6 +197,7 @@ var lang_buttons: Dictionary = {}
 
 func _ready() -> void:
 	_rng.randomize()
+	_build_sfx_pool()
 	aim_arrow.visible = false
 	var earth: MeshInstance3D = get_node_or_null("Environment3D/EnvEarth") as MeshInstance3D
 	if earth != null:
@@ -331,6 +349,7 @@ func _do_launch() -> void:
 	var dir: Vector3 = Vector3.FORWARD.rotated(Vector3.UP, aim_angle)
 	player_top.set_winding(false)
 	player_top.launch(dir, last_wind_effectiveness)
+	_play_sfx(SND_LAUNCH, -4.0, 0.15)
 	if wind_power > 95.0:
 		_toast(_t("toast_snap"), Color(1.0, 0.35, 0.25), Vector3(0.0, 0.5, 3.0), true)
 	foe_top = _spawn_top(false)
@@ -366,6 +385,7 @@ func _try_nudge(screen_pos: Vector2) -> void:
 		return
 	dir = dir.normalized()
 	nudge_cooldown = NUDGE_COOLDOWN
+	_play_sfx(SND_NUDGE, -8.0, 0.2)
 	player_top.velocity += dir * NUDGE_POWER
 	player_top.spin = maxf(player_top.spin - NUDGE_SPIN_COST, 0.0)
 	player_top.flash_direction(dir)
@@ -446,6 +466,10 @@ func _hit_effects(contact: Vector3, strength: float) -> void:
 	burst.global_position = contact + Vector3(0.0, 0.35, 0.0)
 	burst.restart()
 	_camera_nudge()
+	var clash: AudioStream = CLASH_SOUNDS[_rng.randi_range(0, CLASH_SOUNDS.size() - 1)]
+	_play_sfx(clash, clampf(-10.0 + strength * 2.5, -10.0, 2.0), 0.12)
+	if strength > 3.0:
+		_play_sfx(SND_BIG_HIT, 0.0, 0.08)
 	if strength > 1.6:
 		_toast("PANGKAH!", Color(1.0, 0.55, 0.15), contact, true)
 
@@ -490,6 +514,11 @@ func _resolve_eliminations() -> void:
 
 func _toast_elimination(top: Gasing, reason: String) -> void:
 	var template: String = _t("toast_ringout") if reason == "ringout" else _t("toast_topple")
+	if reason == "ringout":
+		_play_sfx(SND_RINGOUT, -2.0, 0.1)
+		_play_sfx(SND_TOPPLE, -6.0, 0.15)
+	else:
+		_play_sfx(SND_TOPPLE, -2.0, 0.1)
 	_toast(template % top.display_name, Color(1.0, 0.45, 0.3), top.position, false)
 
 
@@ -500,6 +529,7 @@ func _finish_duel(player_wins: bool) -> void:
 	foe_gauge.wobbling = false
 	var opp: Dictionary = OPPONENTS[duel_index]
 	if player_wins:
+		_play_sfx(SND_WIN, -3.0, 0.02)
 		round_label.text = _t("round_win")
 		round_label.add_theme_color_override("font_color", PLAYER_COLOR)
 		var award_count: int = _rng.randi_range(1, 2)
@@ -533,6 +563,7 @@ func _after_round(player_wins: bool) -> void:
 
 func _finish_run(won: bool) -> void:
 	run_won = won
+	_play_sfx(SND_WIN if won else SND_LOSE, 0.0, 0.0)
 	over_title.text = _t("over_win") if won else _t("over_lose")
 	over_title.add_theme_color_override("font_color", PLAYER_COLOR if won else Color(1.0, 0.45, 0.3))
 	over_stats.text = _t("duels_won") % [duel_index, OPPONENTS.size()]
@@ -597,6 +628,27 @@ func _clear_tops() -> void:
 		foe_top.queue_free()
 	player_top = null
 	foe_top = null
+
+
+# ---------------------------------------------------------------- audio
+
+func _build_sfx_pool() -> void:
+	for i: int in 8:
+		var p: AudioStreamPlayer = AudioStreamPlayer.new()
+		add_child(p)
+		_sfx_pool.append(p)
+
+
+func _play_sfx(stream: AudioStream, volume_db: float = 0.0, pitch_jitter: float = 0.1) -> void:
+	if stream == null or _sfx_pool.is_empty():
+		return
+	var p: AudioStreamPlayer = _sfx_pool[_sfx_index]
+	_sfx_index = (_sfx_index + 1) % _sfx_pool.size()
+	p.stop()
+	p.stream = stream
+	p.volume_db = volume_db
+	p.pitch_scale = 1.0 + _rng.randf_range(-pitch_jitter, pitch_jitter)
+	p.play()
 
 
 # ---------------------------------------------------------------- effects
@@ -738,7 +790,12 @@ func _mk_button(text: String, base: Color, light_text: bool = false) -> Button:
 	sb_p.bg_color = base.darkened(0.28)
 	b.add_theme_stylebox_override("pressed", sb_p)
 	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.pressed.connect(_on_any_button_pressed)
 	return b
+
+
+func _on_any_button_pressed() -> void:
+	_play_sfx(SND_CLICK, -6.0, 0.05)
 
 
 func _mk_panel_box() -> PanelContainer:
