@@ -10,7 +10,7 @@ const ROTATION_SYNC_SPEED: float = 10.0
 @onready var skeleton_3d: Skeleton3D = $RobotArmature/Skeleton3D
 @onready var head_top_bone_attachment: BoneAttachment3D = %HeadTopBoneAttachment
 
-var last_state: State
+var last_state: PlayerState
 var last_anim := ""
 var curr_color := Color.WHITE
 
@@ -29,7 +29,7 @@ func _process(delta: float) -> void:
 	if player and animation_player: _update_animations()
 
 func _update_animations() -> void:
-	var curr_state: State = player.state_machine.curr_state
+	var curr_state: PlayerState = player.state_machine.curr_state
 	var speed := 1.0
 	var blend := 0.2
 	var anim := ""

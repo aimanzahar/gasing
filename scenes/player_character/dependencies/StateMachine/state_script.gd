@@ -1,5 +1,5 @@
 extends Node
-class_name State
+class_name PlayerState
 
 @warning_ignore("unused_signal")
 signal transitioned

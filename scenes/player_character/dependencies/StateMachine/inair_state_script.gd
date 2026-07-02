@@ -1,4 +1,4 @@
-extends State
+extends PlayerState
 
 class_name InairState
 

@@ -16,6 +16,7 @@ var balance: float = 60.0
 var radius: float = 0.44
 var accent_color: Color = Color(1.0, 0.8, 0.25)
 
+var puppet: bool = false # remote-controlled: net snapshots drive x/z/spin/wobble; die() is RPC-driven
 var spin: float = 0.0
 var launch_spin: float = 1.0
 var velocity: Vector3 = Vector3.ZERO
@@ -206,6 +207,8 @@ func die(reason: String) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if puppet:
+		return
 	if not battling or not alive:
 		return
 	var decay: float = 6.0 * (75.0 / spin_reserve)

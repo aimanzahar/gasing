@@ -1,6 +1,7 @@
 extends Node3D
 
 enum State { READY, CRAFT, WIND, LAUNCH, BATTLE, ROUND_OVER, OVER }
+enum MenuScreen { TITLE, MP, WAIT }
 
 const GASING_SCENE: PackedScene = preload("res://gasing.tscn")
 const CLASH_SOUNDS: Array[AudioStream] = [
@@ -47,7 +48,7 @@ const STRINGS: Dictionary = {
 	"en": {
 		"heritage": "A Malay heritage game — wind your top, strike your rival, rule the ring.",
 		"fact": "Did you know? Gasing is a heritage sport of Kelantan and Melaka.",
-		"prompt": "Press SPACE to begin",
+		"prompt": "Press SPACE for single player",
 		"wind_hint": "Hold SPACE / left mouse to wind the cord — release in the GREEN zone!  (A/D to aim)",
 		"bench": "CRAFTING BENCH",
 		"duel_line": "Duel %d / %d  —  Opponent: %s",
@@ -88,11 +89,40 @@ const STRINGS: Dictionary = {
 		"tip_merbau": "Merbau — dense heartwood.\n+0.3 Mass: your strikes shove rivals harder\nand this top resists knockback.",
 		"tip_kemuning": "Kemuning — fine golden wood.\n+7 Balance: wobbles later as spin fades\nand resists toppling when struck.",
 		"tip_besi": "Besi — a heavy iron core.\n+0.5 Mass: much harder pangkah strikes.",
+		"single_player": "SINGLE PLAYER",
+		"multiplayer": "MULTIPLAYER",
+		"quit": "QUIT",
+		"mp_steam_header": "VIA STEAM",
+		"mp_lan_header": "VIA LAN",
+		"host_steam": "HOST (STEAM)",
+		"host_lan": "HOST (LAN)",
+		"join_lan": "JOIN BY IP",
+		"lan_ip_label": "Host IP:",
+		"invite_friend": "INVITE FRIEND",
+		"invite_hint": "Or press Shift+Tab and invite from the Steam overlay.",
+		"steam_join_hint": "To join a friend, accept their Steam invite.",
+		"steam_offline": "Steam not detected — Steam play unavailable.",
+		"back": "BACK",
+		"cancel": "CANCEL",
+		"waiting_opponent": "WAITING FOR OPPONENT...",
+		"connecting": "CONNECTING...",
+		"opponent_found": "OPPONENT FOUND!",
+		"lan_share_ip": "Friend joins with this IP: %s",
+		"err_host_failed": "Could not host the match.",
+		"err_join_failed": "Could not join — check the IP address.",
+		"err_join_steam": "Could not join the Steam match (it may be full).",
+		"mp_disconnected": "Opponent disconnected.",
+		"mp_server_lost": "Connection to the host was lost.",
+		"waiting": "Waiting for opponent...",
+		"score_line": "You %d — %d %s",
+		"opp_left": "OPPONENT DISCONNECTED",
+		"back_menu": "BACK TO MENU",
+		"vs_line": "Duel vs %s",
 	},
 	"ms": {
 		"heritage": "Permainan warisan Melayu — pusing gasingmu, pangkah lawan, jadi juara gelanggang.",
 		"fact": "Tahu tak? Gasing ialah sukan warisan di Kelantan dan Melaka.",
-		"prompt": "Tekan SPACE untuk mula",
+		"prompt": "Tekan SPACE untuk main sendirian",
 		"wind_hint": "Tahan SPACE / tetikus kiri untuk memusing tali — lepas dalam zon HIJAU!  (A/D untuk sasaran)",
 		"bench": "BENGKEL GASING",
 		"duel_line": "Duel %d / %d  —  Lawan: %s",
@@ -133,6 +163,35 @@ const STRINGS: Dictionary = {
 		"tip_merbau": "Merbau — teras kayu padat.\n+0.3 Jisim: pangkah anda lebih kuat\ndan gasing lebih tahan tolakan.",
 		"tip_kemuning": "Kemuning — kayu halus keemasan.\n+7 Imbangan: lambat goyang bila pusingan susut\ndan tahan tumbang bila dipangkah.",
 		"tip_besi": "Besi — teras besi berat.\n+0.5 Jisim: pangkah jauh lebih kuat.",
+		"single_player": "MAIN SENDIRIAN",
+		"multiplayer": "BERBILANG PEMAIN",
+		"quit": "KELUAR",
+		"mp_steam_header": "MELALUI STEAM",
+		"mp_lan_header": "MELALUI LAN",
+		"host_steam": "JADI HOS (STEAM)",
+		"host_lan": "JADI HOS (LAN)",
+		"join_lan": "SERTAI GUNA IP",
+		"lan_ip_label": "IP hos:",
+		"invite_friend": "JEMPUT RAKAN",
+		"invite_hint": "Atau tekan Shift+Tab dan jemput dari overlay Steam.",
+		"steam_join_hint": "Untuk sertai rakan, terima jemputan Steam mereka.",
+		"steam_offline": "Steam tidak dikesan — mod Steam tidak tersedia.",
+		"back": "KEMBALI",
+		"cancel": "BATAL",
+		"waiting_opponent": "MENUNGGU LAWAN...",
+		"connecting": "MENYAMBUNG...",
+		"opponent_found": "LAWAN DITEMUI!",
+		"lan_share_ip": "Rakan sertai dengan IP ini: %s",
+		"err_host_failed": "Gagal membuka perlawanan.",
+		"err_join_failed": "Gagal menyertai — semak alamat IP.",
+		"err_join_steam": "Gagal menyertai perlawanan Steam (mungkin penuh).",
+		"mp_disconnected": "Lawan terputus sambungan.",
+		"mp_server_lost": "Sambungan ke hos terputus.",
+		"waiting": "Menunggu lawan...",
+		"score_line": "Kamu %d — %d %s",
+		"opp_left": "LAWAN TERPUTUS SAMBUNGAN",
+		"back_menu": "KEMBALI KE MENU",
+		"vs_line": "Duel lawan %s",
 	},
 }
 
@@ -188,6 +247,47 @@ var shape_cards: Dictionary = {}
 var material_buttons: Dictionary = {}
 var lang_buttons: Dictionary = {}
 
+var menu_screen: MenuScreen = MenuScreen.TITLE
+var mp_panel: Control = null
+var wait_panel: Control = null
+var _all_panels: Array[Control] = []
+var menu_notice: Label = null
+var _notice_tween: Tween = null
+var sp_button: Button = null
+var mp_button: Button = null
+var quit_button: Button = null
+var mp_title: Label = null
+var mp_steam_header_label: Label = null
+var mp_lan_header_label: Label = null
+var host_steam_button: Button = null
+var host_lan_button: Button = null
+var join_lan_button: Button = null
+var lan_ip_edit: LineEdit = null
+var lan_ip_label: Label = null
+var steam_join_hint_label: Label = null
+var steam_offline_label: Label = null
+var mp_back_button: Button = null
+var wait_title: Label = null
+var wait_info: Label = null
+var invite_button: Button = null
+var wait_cancel_button: Button = null
+
+var net_active: bool = false
+var net_ended: bool = false
+var net_opp_name: String = ""
+var net_opp_config: Dictionary = {}
+var net_ready_sent: bool = false
+var net_wind_sent: bool = false
+var net_my_wind: Vector2 = Vector2.ZERO
+var net_opp_wind: Vector2 = Vector2.ZERO
+var net_opp_wind_in: bool = false
+var net_my_wins: int = 0
+var net_opp_wins: int = 0
+var net_client_nudge_cd: float = 0.0
+
+var _netbot: bool = false # debug autopilot for LAN testing: run with `-- netbot-host` or `-- netbot-join`
+var _netbot_cd: float = 0.0
+
 @onready var camera: Camera3D = $Camera3D
 @onready var aim_arrow: Node3D = $AimArrow
 @onready var burst: CPUParticles3D = $HitBurst
@@ -207,9 +307,15 @@ func _ready() -> void:
 		earth.set_surface_override_material(0, earth_mat)
 	_configure_burst()
 	_build_ui()
+	Online.joined_lobby.connect(_on_mp_joined_lobby)
+	Online.player_connected.connect(_on_mp_player_connected)
+	Online.player_disconnected.connect(_on_mp_player_disconnected)
+	Online.server_disconnected.connect(_on_mp_server_disconnected)
+	Online.connection_failed.connect(_on_mp_connection_failed)
 	_reset_run()
 	_apply_language()
 	_enter_state(State.READY)
+	_netbot_init()
 
 
 func _t(key: String) -> String:
@@ -224,20 +330,27 @@ func _enter_state(next: State) -> void:
 		State.READY:
 			_clear_tops()
 			_set_hud_visible(false)
-			_show_panel(ready_panel)
+			_show_menu_screen(MenuScreen.TITLE)
 		State.CRAFT:
 			_clear_tops()
 			_set_hud_visible(false)
+			net_ready_sent = false
+			net_opp_config = {}
+			fight_button.disabled = false
+			craft_info.text = _t("pick_info")
 			_refresh_craft()
 			_show_panel(craft_panel)
 		State.WIND:
 			_show_panel(null)
 			_set_hud_visible(true)
+			net_wind_sent = false
+			net_opp_wind_in = false
 			battle_hint.visible = false
 			player_gauge.visible = false
 			foe_gauge.visible = false
 			wind_meter.visible = true
 			wind_hint.visible = true
+			wind_hint.text = _t("wind_hint")
 			wind_power = 0.0
 			wind_meter.power = 0.0
 			wind_meter.shown = 0.0
@@ -268,7 +381,7 @@ func _enter_state(next: State) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	match state:
 		State.READY:
-			if _is_advance_input(event):
+			if menu_screen == MenuScreen.TITLE and event.is_action_pressed("ui_accept"):
 				get_viewport().set_input_as_handled()
 				_enter_state(State.CRAFT)
 		State.BATTLE:
@@ -276,28 +389,33 @@ func _unhandled_input(event: InputEvent) -> void:
 			if click != null and click.pressed and click.button_index == MOUSE_BUTTON_LEFT:
 				_try_nudge(click.position)
 		State.WIND:
+			if net_wind_sent:
+				return # released already — waiting for the opponent's wind
 			if event.is_action_pressed("wind"):
 				winding = true
 			elif event.is_action_released("wind") and winding:
 				winding = false
-				_enter_state(State.LAUNCH)
+				if net_active:
+					_net_release_wind()
+				else:
+					_enter_state(State.LAUNCH)
 			elif event is InputEventMouseMotion and winding:
 				var motion: InputEventMouseMotion = event
 				aim_angle = clampf(aim_angle - motion.relative.x * 0.003, -1.1, 1.1)
 		State.OVER:
 			if event.is_action_pressed("ui_accept"):
-				_restart_run()
-
-
-func _is_advance_input(event: InputEvent) -> bool:
-	if event.is_action_pressed("ui_accept"):
-		return true
-	var mb: InputEventMouseButton = event as InputEventMouseButton
-	return mb != null and mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+				if net_active:
+					_net_teardown()
+				else:
+					_restart_run()
 
 
 func _physics_process(delta: float) -> void:
+	if _netbot:
+		_netbot_tick(delta)
 	if state == State.WIND:
+		if net_wind_sent:
+			return # meter/arrow hidden while waiting for the opponent
 		var turn: float = Input.get_axis("aim_left", "aim_right")
 		aim_angle = clampf(aim_angle - turn * 1.5 * delta, -1.1, 1.1)
 		aim_arrow.rotation.y = aim_angle
@@ -309,13 +427,20 @@ func _physics_process(delta: float) -> void:
 		return
 	hit_cooldown = maxf(hit_cooldown - delta, 0.0)
 	nudge_cooldown = maxf(nudge_cooldown - delta, 0.0)
-	var p_ok: bool = is_instance_valid(player_top) and player_top.alive
-	var f_ok: bool = is_instance_valid(foe_top) and foe_top.alive
-	if p_ok and f_ok:
-		_ai_think(delta)
-		_check_collision()
+	if _net_sim_authority():
+		net_client_nudge_cd = maxf(net_client_nudge_cd - delta, 0.0)
+		var p_ok: bool = is_instance_valid(player_top) and player_top.alive
+		var f_ok: bool = is_instance_valid(foe_top) and foe_top.alive
+		if p_ok and f_ok:
+			if not net_active:
+				_ai_think(delta)
+			_check_collision()
+		_resolve_eliminations()
+		if net_active and state == State.BATTLE and p_ok and f_ok:
+			_net_snapshot.rpc(
+				Vector2(player_top.position.x, player_top.position.z), player_top.spin, player_top.wobble,
+				Vector2(foe_top.position.x, foe_top.position.z), foe_top.spin, foe_top.wobble)
 	_update_gauges()
-	_resolve_eliminations()
 
 
 # ---------------------------------------------------------------- launch
@@ -334,9 +459,14 @@ func _spawn_top(is_player: bool) -> Gasing:
 	var g: Gasing = GASING_SCENE.instantiate() as Gasing
 	g.name = "PlayerTop" if is_player else "FoeTop"
 	add_child(g)
+	g.puppet = net_active and not _net_is_host() # client renders both tops from host snapshots
 	if is_player:
-		g.setup(_t("you"), selected_shape, player_shapes[selected_shape], PLAYER_COLOR)
+		var my_name: String = Online.personal_player_data.display_name if net_active else _t("you")
+		g.setup(my_name, selected_shape, player_shapes[selected_shape], PLAYER_COLOR)
 		g.position = Vector3(0.0, 0.0, 3.0)
+	elif net_active:
+		g.setup(String(net_opp_config.get("name", net_opp_name)), String(net_opp_config.get("shape", "jantung")), net_opp_config.get("stats", BASE_SHAPES["jantung"]), FOE_COLOR)
+		g.position = Vector3(0.0, 0.0, -3.0)
 	else:
 		var opp: Dictionary = OPPONENTS[duel_index]
 		g.setup(opp.name, opp.shape, opp, opp.get("color", FOE_COLOR))
@@ -386,10 +516,18 @@ func _try_nudge(screen_pos: Vector2) -> void:
 	dir = dir.normalized()
 	nudge_cooldown = NUDGE_COOLDOWN
 	_play_sfx(SND_NUDGE, -8.0, 0.2)
+	if net_active and not _net_is_host():
+		# optimistic FX only; the host validates and applies it to our top (its foe_top)
+		player_top.flash_direction(dir)
+		_flash_click_marker(point)
+		_net_request_nudge.rpc_id(1, Vector2(-point.x, -point.z))
+		return
 	player_top.velocity += dir * NUDGE_POWER
 	player_top.spin = maxf(player_top.spin - NUDGE_SPIN_COST, 0.0)
 	player_top.flash_direction(dir)
 	_flash_click_marker(point)
+	if net_active:
+		_net_nudge_fx.rpc(Vector2(dir.x, dir.z))
 
 
 func _flash_click_marker(point: Vector3) -> void:
@@ -460,6 +598,8 @@ func _check_collision() -> void:
 	last_striker = "player" if imp_on_foe >= imp_on_player else "foe"
 	var contact: Vector3 = player_top.position + dir * player_top.radius
 	_hit_effects(contact, maxf(imp_on_foe, imp_on_player))
+	if net_active:
+		_net_hit_fx.rpc(Vector2(contact.x, contact.z), maxf(imp_on_foe, imp_on_player))
 
 
 func _hit_effects(contact: Vector3, strength: float) -> void:
@@ -498,18 +638,31 @@ func _resolve_eliminations() -> void:
 			player_wins = last_striker != "player"
 		else:
 			player_wins = player_top.spin > foe_top.spin
-		_toast(_t("toast_double"), TEXT_COLOR, Vector3.ZERO, false)
-		player_top.die(p_reason)
-		foe_top.die(f_reason)
 	elif f_reason != "":
 		player_wins = true
-		_toast_elimination(foe_top, f_reason)
-		foe_top.die(f_reason)
 	else:
 		player_wins = false
-		_toast_elimination(player_top, p_reason)
-		player_top.die(p_reason)
-	_finish_duel(player_wins)
+	if net_active:
+		# reasons are in host roles: player_top here IS the host's top
+		_net_round_over.rpc(p_reason, f_reason, player_wins)
+		return
+	_apply_round_result(p_reason, f_reason, player_wins)
+
+
+func _apply_round_result(my_reason: String, opp_reason: String, i_win: bool) -> void:
+	if my_reason != "" and opp_reason != "":
+		_toast(_t("toast_double"), TEXT_COLOR, Vector3.ZERO, false)
+		if is_instance_valid(player_top):
+			player_top.die(my_reason)
+		if is_instance_valid(foe_top):
+			foe_top.die(opp_reason)
+	elif opp_reason != "":
+		_toast_elimination(foe_top, opp_reason)
+		foe_top.die(opp_reason)
+	else:
+		_toast_elimination(player_top, my_reason)
+		player_top.die(my_reason)
+	_finish_duel(i_win)
 
 
 func _toast_elimination(top: Gasing, reason: String) -> void:
@@ -527,6 +680,23 @@ func _finish_duel(player_wins: bool) -> void:
 	battle_hint.visible = false
 	player_gauge.wobbling = false
 	foe_gauge.wobbling = false
+	if net_active:
+		if player_wins:
+			net_my_wins += 1
+			_play_sfx(SND_WIN, -3.0, 0.02)
+			round_label.text = _t("round_win")
+			round_label.add_theme_color_override("font_color", PLAYER_COLOR)
+		else:
+			net_opp_wins += 1
+			_play_sfx(SND_LOSE, -3.0, 0.02)
+			round_label.text = _t("round_lose") % net_opp_name
+			round_label.add_theme_color_override("font_color", FOE_COLOR)
+		award_label.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
+		_update_top_bar()
+		_show_panel(round_panel)
+		if _net_is_host():
+			get_tree().create_timer(2.4).timeout.connect(_net_host_next_round)
+		return
 	var opp: Dictionary = OPPONENTS[duel_index]
 	if player_wins:
 		_play_sfx(SND_WIN, -3.0, 0.02)
@@ -590,10 +760,23 @@ func _restart_run() -> void:
 
 
 func _on_restart_pressed() -> void:
+	if net_active:
+		_net_teardown()
+		return
 	_restart_run()
 
 
 func _on_fight_pressed() -> void:
+	if net_active:
+		if net_ready_sent:
+			return
+		net_ready_sent = true
+		fight_button.disabled = true
+		craft_info.text = _t("waiting")
+		_net_craft_ready.rpc(_net_my_config())
+		if not net_opp_config.is_empty():
+			_enter_state(State.WIND)
+		return
 	_enter_state(State.WIND)
 
 
@@ -703,7 +886,7 @@ func _set_hud_visible(v: bool) -> void:
 
 
 func _show_panel(target: Control) -> void:
-	for panel: Control in [ready_panel, craft_panel, round_panel, over_panel]:
+	for panel: Control in _all_panels:
 		if panel == null:
 			continue
 		if panel == target:
@@ -718,8 +901,11 @@ func _show_panel(target: Control) -> void:
 
 
 func _update_top_bar() -> void:
-	var opp: Dictionary = OPPONENTS[mini(duel_index, OPPONENTS.size() - 1)]
-	duel_label.text = _t("duel_line") % [mini(duel_index + 1, OPPONENTS.size()), OPPONENTS.size(), opp.name]
+	if net_active:
+		duel_label.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
+	else:
+		var opp: Dictionary = OPPONENTS[mini(duel_index, OPPONENTS.size() - 1)]
+		duel_label.text = _t("duel_line") % [mini(duel_index + 1, OPPONENTS.size()), OPPONENTS.size(), opp.name]
 	mats_label.text = _t("mats_line") % [materials_owned.merbau, materials_owned.kemuning, materials_owned.besi]
 
 
@@ -731,13 +917,28 @@ func _apply_language() -> void:
 	battle_hint.text = _t("battle_hint")
 	wind_meter.label_text = _t("meter")
 	player_gauge.title = _t("gauge_you")
-	foe_gauge.title = _t("gauge_foe")
+	foe_gauge.title = net_opp_name if net_active and not net_opp_name.is_empty() else _t("gauge_foe")
 	craft_title.text = _t("bench")
 	craft_mats_hint.text = _t("mats_hint")
 	craft_info.text = _t("pick_info")
 	fight_button.text = _t("fight")
 	restart_button.text = _t("restart")
 	over_hint.text = _t("or_space")
+	sp_button.text = _t("single_player")
+	mp_button.text = _t("multiplayer")
+	quit_button.text = _t("quit")
+	mp_title.text = _t("multiplayer")
+	mp_steam_header_label.text = _t("mp_steam_header")
+	mp_lan_header_label.text = _t("mp_lan_header")
+	host_steam_button.text = _t("host_steam")
+	host_lan_button.text = _t("host_lan")
+	join_lan_button.text = _t("join_lan")
+	lan_ip_label.text = _t("lan_ip_label")
+	steam_join_hint_label.text = _t("steam_join_hint")
+	steam_offline_label.text = _t("steam_offline")
+	mp_back_button.text = _t("back")
+	invite_button.text = _t("invite_friend")
+	wait_cancel_button.text = _t("cancel")
 	for id: String in shape_cards:
 		var card: Dictionary = shape_cards[id]
 		var role: Label = card.role
@@ -821,6 +1022,7 @@ func _mk_fullrect_center() -> CenterContainer:
 	c.set_anchors_preset(Control.PRESET_FULL_RECT)
 	c.visible = false
 	ui.add_child(c)
+	_all_panels.append(c)
 	return c
 
 
@@ -914,7 +1116,18 @@ func _build_ui() -> void:
 	battle_hint.visible = false
 	hud.add_child(battle_hint)
 
+	menu_notice = _mk_label("", 15, Color(1.0, 0.45, 0.3))
+	menu_notice.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	menu_notice.offset_left = -420.0
+	menu_notice.offset_right = 420.0
+	menu_notice.offset_top = -80.0
+	menu_notice.offset_bottom = -50.0
+	menu_notice.modulate.a = 0.0
+	ui.add_child(menu_notice)
+
 	_build_ready_panel()
+	_build_mp_panel()
+	_build_wait_panel()
 	_build_craft_panel()
 	_build_round_panel()
 	_build_over_panel()
@@ -930,7 +1143,24 @@ func _build_ready_panel() -> void:
 	v.add_child(ready_heritage)
 	ready_fact = _mk_label("", 14, Color(0.75, 0.66, 0.52))
 	v.add_child(ready_fact)
-	ready_prompt = _mk_label("", 20, Color(0.95, 0.95, 0.9))
+	var menu_col: VBoxContainer = VBoxContainer.new()
+	menu_col.add_theme_constant_override("separation", 10)
+	menu_col.custom_minimum_size = Vector2(260.0, 0.0)
+	sp_button = _mk_button("", PLAYER_COLOR)
+	sp_button.add_theme_font_size_override("font_size", 20)
+	sp_button.pressed.connect(_on_single_player_pressed)
+	menu_col.add_child(sp_button)
+	mp_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	mp_button.add_theme_font_size_override("font_size", 20)
+	mp_button.pressed.connect(_on_multiplayer_pressed)
+	menu_col.add_child(mp_button)
+	quit_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	quit_button.pressed.connect(_on_quit_pressed)
+	menu_col.add_child(quit_button)
+	var menu_wrap: CenterContainer = CenterContainer.new()
+	menu_wrap.add_child(menu_col)
+	v.add_child(menu_wrap)
+	ready_prompt = _mk_label("", 16, Color(0.95, 0.95, 0.9))
 	v.add_child(ready_prompt)
 	var lang_row: HBoxContainer = HBoxContainer.new()
 	lang_row.add_theme_constant_override("separation", 12)
@@ -945,6 +1175,222 @@ func _build_ready_panel() -> void:
 	var pulse: Tween = create_tween().set_loops()
 	pulse.tween_property(ready_prompt, "modulate:a", 0.35, 0.7)
 	pulse.tween_property(ready_prompt, "modulate:a", 1.0, 0.7)
+
+
+func _build_mp_panel() -> void:
+	mp_panel = _mk_fullrect_center()
+	var box: PanelContainer = _mk_panel_box()
+	mp_panel.add_child(box)
+	var v: VBoxContainer = VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	box.add_child(v)
+	mp_title = _mk_label("", 30, PLAYER_COLOR)
+	v.add_child(mp_title)
+	mp_steam_header_label = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	v.add_child(mp_steam_header_label)
+	host_steam_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	host_steam_button.pressed.connect(_on_host_steam_pressed)
+	var hs_wrap: CenterContainer = CenterContainer.new()
+	hs_wrap.add_child(host_steam_button)
+	v.add_child(hs_wrap)
+	steam_join_hint_label = _mk_label("", 12, Color(0.78, 0.7, 0.56))
+	v.add_child(steam_join_hint_label)
+	steam_offline_label = _mk_label("", 13, Color(1.0, 0.45, 0.3))
+	steam_offline_label.visible = false
+	v.add_child(steam_offline_label)
+	v.add_child(HSeparator.new())
+	mp_lan_header_label = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	v.add_child(mp_lan_header_label)
+	host_lan_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	host_lan_button.pressed.connect(_on_host_lan_pressed)
+	var hl_wrap: CenterContainer = CenterContainer.new()
+	hl_wrap.add_child(host_lan_button)
+	v.add_child(hl_wrap)
+	var join_row: HBoxContainer = HBoxContainer.new()
+	join_row.add_theme_constant_override("separation", 8)
+	join_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	lan_ip_label = _mk_label("", 14)
+	join_row.add_child(lan_ip_label)
+	lan_ip_edit = _mk_line_edit("127.0.0.1")
+	lan_ip_edit.text = "127.0.0.1"
+	lan_ip_edit.text_submitted.connect(func(_txt: String) -> void: _on_join_lan_pressed())
+	join_row.add_child(lan_ip_edit)
+	join_lan_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	join_lan_button.pressed.connect(_on_join_lan_pressed)
+	join_row.add_child(join_lan_button)
+	v.add_child(join_row)
+	mp_back_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	mp_back_button.pressed.connect(_on_mp_back_pressed)
+	var back_wrap: CenterContainer = CenterContainer.new()
+	back_wrap.add_child(mp_back_button)
+	v.add_child(back_wrap)
+
+
+func _build_wait_panel() -> void:
+	wait_panel = _mk_fullrect_center()
+	var box: PanelContainer = _mk_panel_box()
+	wait_panel.add_child(box)
+	var v: VBoxContainer = VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	box.add_child(v)
+	wait_title = _mk_label("", 30, PLAYER_COLOR)
+	v.add_child(wait_title)
+	wait_info = _mk_label("", 15)
+	v.add_child(wait_info)
+	invite_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	invite_button.visible = false
+	invite_button.pressed.connect(_on_invite_friend_pressed)
+	var iv_wrap: CenterContainer = CenterContainer.new()
+	iv_wrap.add_child(invite_button)
+	v.add_child(iv_wrap)
+	wait_cancel_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	wait_cancel_button.pressed.connect(_on_mp_cancel_pressed)
+	var cc_wrap: CenterContainer = CenterContainer.new()
+	cc_wrap.add_child(wait_cancel_button)
+	v.add_child(cc_wrap)
+	var pulse: Tween = create_tween().set_loops()
+	pulse.tween_property(wait_title, "modulate:a", 0.35, 0.7)
+	pulse.tween_property(wait_title, "modulate:a", 1.0, 0.7)
+
+
+func _mk_line_edit(placeholder: String) -> LineEdit:
+	var e: LineEdit = LineEdit.new()
+	e.placeholder_text = placeholder
+	e.custom_minimum_size = Vector2(190.0, 0.0)
+	e.add_theme_font_size_override("font_size", 16)
+	e.add_theme_color_override("font_color", TEXT_COLOR)
+	e.add_theme_color_override("caret_color", PLAYER_COLOR)
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = Color(0.0, 0.0, 0.0, 0.5)
+	sb.set_corner_radius_all(8)
+	sb.border_width_bottom = 2
+	sb.border_width_top = 2
+	sb.border_width_left = 2
+	sb.border_width_right = 2
+	sb.border_color = Color(0.55, 0.38, 0.16, 0.8)
+	sb.content_margin_left = 10.0
+	sb.content_margin_right = 10.0
+	sb.content_margin_top = 6.0
+	sb.content_margin_bottom = 6.0
+	e.add_theme_stylebox_override("normal", sb)
+	var sb_f: StyleBoxFlat = sb.duplicate()
+	sb_f.border_color = PLAYER_COLOR
+	e.add_theme_stylebox_override("focus", sb_f)
+	return e
+
+
+func _show_menu_screen(screen: MenuScreen) -> void:
+	menu_screen = screen
+	match screen:
+		MenuScreen.TITLE:
+			_show_panel(ready_panel)
+		MenuScreen.MP:
+			_refresh_mp_panel()
+			_show_panel(mp_panel)
+		MenuScreen.WAIT:
+			_show_panel(wait_panel)
+
+
+func _show_menu_notice(text: String) -> void:
+	menu_notice.text = text
+	menu_notice.modulate.a = 1.0
+	if _notice_tween != null and _notice_tween.is_valid():
+		_notice_tween.kill()
+	_notice_tween = create_tween()
+	_notice_tween.tween_property(menu_notice, "modulate:a", 0.0, 0.8).set_delay(4.0)
+
+
+func _refresh_mp_panel() -> void:
+	var steam_ok: bool = Online.steam_ready
+	host_steam_button.disabled = not steam_ok
+	host_steam_button.modulate = Color(1.0, 1.0, 1.0, 1.0) if steam_ok else Color(0.55, 0.55, 0.55, 1.0)
+	steam_offline_label.visible = not steam_ok
+	host_lan_button.disabled = false
+	join_lan_button.disabled = false
+
+
+func _set_wait_status(title: String, info: String, show_invite: bool) -> void:
+	wait_title.text = title
+	wait_info.text = info
+	invite_button.visible = show_invite
+
+
+func _lan_display_ip() -> String:
+	var fallback: String = ""
+	for ip: String in IP.get_local_addresses():
+		if ip.count(".") != 3 or ip.begins_with("127."):
+			continue
+		if ip.begins_with("192.168.") or ip.begins_with("10."):
+			return ip
+		if fallback.is_empty():
+			fallback = ip
+	return fallback if not fallback.is_empty() else "127.0.0.1"
+
+
+func _on_single_player_pressed() -> void:
+	_enter_state(State.CRAFT)
+
+
+func _on_multiplayer_pressed() -> void:
+	_show_menu_screen(MenuScreen.MP)
+
+
+func _on_quit_pressed() -> void:
+	Online.leave_lobby()
+	get_tree().quit()
+
+
+func _on_mp_back_pressed() -> void:
+	_show_menu_screen(MenuScreen.TITLE)
+
+
+func _on_host_steam_pressed() -> void:
+	host_steam_button.disabled = true
+	host_lan_button.disabled = true
+	join_lan_button.disabled = true
+	_show_menu_screen(MenuScreen.WAIT)
+	_set_wait_status(_t("connecting"), "", false)
+	wait_cancel_button.disabled = true # cancelling mid-await would let the late lobby_created callback resurrect an abandoned lobby
+	var err: int = await Online.host_steam_lobby()
+	wait_cancel_button.disabled = false
+	if err == Online.ErrorCodes.SUCCESS:
+		_set_wait_status(_t("waiting_opponent"), _t("invite_hint"), true)
+	else:
+		_show_menu_screen(MenuScreen.MP)
+		_show_menu_notice(_t("err_host_failed"))
+
+
+func _on_invite_friend_pressed() -> void:
+	if Online.steam_lobby_id != 0:
+		Steam.activateGameOverlayInviteDialog(Online.steam_lobby_id)
+
+
+func _on_host_lan_pressed() -> void:
+	var err: int = Online.host_local_lobby()
+	if err == Online.ErrorCodes.SUCCESS:
+		_show_menu_screen(MenuScreen.WAIT)
+		_set_wait_status(_t("waiting_opponent"), _t("lan_share_ip") % _lan_display_ip(), false)
+	else:
+		_show_menu_notice(_t("err_host_failed"))
+
+
+func _on_join_lan_pressed() -> void:
+	var address: String = lan_ip_edit.text.strip_edges()
+	if address.is_empty():
+		address = Online.LOCAL_SERVER_ADDRESS
+	var err: int = Online.join_address(address)
+	if err != Online.ErrorCodes.SUCCESS:
+		_show_menu_notice(_t("err_join_failed"))
+		return
+	# SUCCESS only means the ENet connection attempt started; completion arrives
+	# via player_connected (count 2) and failure via connection_failed.
+	_show_menu_screen(MenuScreen.WAIT)
+	_set_wait_status(_t("connecting"), "", false)
+
+
+func _on_mp_cancel_pressed() -> void:
+	Online.leave_lobby()
+	_show_menu_screen(MenuScreen.MP)
 
 
 func _build_craft_panel() -> void:
@@ -1049,8 +1495,11 @@ func _build_over_panel() -> void:
 
 
 func _refresh_craft() -> void:
-	var opp: Dictionary = OPPONENTS[mini(duel_index, OPPONENTS.size() - 1)]
-	craft_duel_label.text = _t("craft_duel_line") % [mini(duel_index + 1, OPPONENTS.size()), OPPONENTS.size(), opp.name]
+	if net_active:
+		craft_duel_label.text = _t("vs_line") % net_opp_name
+	else:
+		var opp: Dictionary = OPPONENTS[mini(duel_index, OPPONENTS.size() - 1)]
+		craft_duel_label.text = _t("craft_duel_line") % [mini(duel_index + 1, OPPONENTS.size()), OPPONENTS.size(), opp.name]
 	for mat_id: String in MATERIAL_DEFS:
 		var mb: Button = material_buttons[mat_id]
 		var def: Dictionary = MATERIAL_DEFS[mat_id]
@@ -1071,6 +1520,283 @@ func _refresh_craft() -> void:
 func _tween_bar(bar: ProgressBar, value: float) -> void:
 	var tw: Tween = create_tween()
 	tw.tween_property(bar, "value", clampf(value, 0.0, 1.0), 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+
+# ---------------------------------------------------------------- multiplayer
+# Wire convention: every vector on the wire is in HOST frame. The client negates
+# x/z at its boundary (applying snapshots/FX, sending its nudge point). Aim angles
+# cross unchanged: FORWARD.rotated(UP, a) mirrored through the origin equals
+# BACK.rotated(UP, a). Own top is always gold at z=+3, opponent teal at z=-3;
+# PlayerData.color is deliberately ignored for the tops.
+
+func _net_is_host() -> bool:
+	return multiplayer.is_server()
+
+
+func _net_sim_authority() -> bool:
+	return not net_active or multiplayer.is_server()
+
+
+func _net_my_config() -> Dictionary:
+	return {
+		"name": Online.personal_player_data.display_name,
+		"shape": selected_shape,
+		"stats": (player_shapes[selected_shape] as Dictionary).duplicate(),
+	}
+
+
+func _net_setup() -> void:
+	net_active = true
+	net_ended = false
+	net_opp_config = {}
+	net_ready_sent = false
+	net_wind_sent = false
+	net_opp_wind_in = false
+	net_my_wins = 0
+	net_opp_wins = 0
+	net_client_nudge_cd = 0.0
+	net_opp_name = ""
+	for pd: PlayerData in Online.players.values():
+		if pd.multiplayer_id != multiplayer.get_unique_id():
+			net_opp_name = pd.display_name
+	_reset_run()
+	materials_owned = {"merbau": 1, "kemuning": 1, "besi": 1} # fixed symmetric MP budget, no awards
+	foe_gauge.title = net_opp_name
+	foe_gauge.ring_color = FOE_COLOR
+
+
+@rpc("authority", "reliable", "call_local")
+func _net_start_match() -> void:
+	_net_setup()
+	_enter_state(State.CRAFT)
+
+
+@rpc("any_peer", "reliable")
+func _net_craft_ready(cfg: Dictionary) -> void:
+	net_opp_config = cfg
+	if net_ready_sent and state == State.CRAFT:
+		_enter_state(State.WIND)
+
+
+func _net_release_wind() -> void:
+	net_wind_sent = true
+	net_my_wind = Vector2(wind_power, aim_angle)
+	wind_meter.visible = false
+	aim_arrow.visible = false
+	if is_instance_valid(player_top):
+		player_top.set_winding(false)
+	wind_hint.text = _t("waiting")
+	if wind_power > 95.0:
+		_toast(_t("toast_snap"), Color(1.0, 0.35, 0.25), Vector3(0.0, 0.5, 3.0), true)
+	_net_wind_done.rpc(net_my_wind.x, net_my_wind.y)
+	if net_opp_wind_in:
+		_mp_do_launch(net_my_wind.x, net_my_wind.y, net_opp_wind.x, net_opp_wind.y)
+
+
+@rpc("any_peer", "reliable")
+func _net_wind_done(power: float, angle: float) -> void:
+	net_opp_wind = Vector2(power, angle)
+	net_opp_wind_in = true
+	if net_wind_sent and state == State.WIND:
+		_mp_do_launch(net_my_wind.x, net_my_wind.y, power, angle)
+
+
+func _mp_do_launch(my_power: float, my_angle: float, opp_power: float, opp_angle: float) -> void:
+	# Deterministic on both peers: pure function of the two (power, angle) pairs.
+	# Never add RNG here — the peers must converge without a host round-trip.
+	if state != State.WIND:
+		return
+	wind_meter.visible = false
+	wind_hint.visible = false
+	aim_arrow.visible = false
+	last_wind_effectiveness = _wind_effectiveness(my_power)
+	player_top.set_winding(false)
+	player_top.launch(Vector3.FORWARD.rotated(Vector3.UP, my_angle), last_wind_effectiveness)
+	_play_sfx(SND_LAUNCH, -4.0, 0.15)
+	foe_top = _spawn_top(false)
+	foe_gauge.ring_color = foe_top.accent_color
+	foe_top.launch(Vector3.BACK.rotated(Vector3.UP, opp_angle), _wind_effectiveness(opp_power))
+	if opp_power > 95.0:
+		_toast(_t("toast_snap"), Color(1.0, 0.35, 0.25), Vector3(0.0, 0.5, -3.0), true)
+	last_striker = ""
+	hit_cooldown = 0.0
+	nudge_cooldown = 0.0
+	net_client_nudge_cd = 0.0
+	_enter_state(State.BATTLE)
+
+
+@rpc("authority", "unreliable_ordered")
+func _net_snapshot(hp: Vector2, hspin: float, hwob: float, cp: Vector2, cspin: float, cwob: float) -> void:
+	if state != State.BATTLE:
+		return # late packets after round end
+	if is_instance_valid(foe_top) and foe_top.alive:
+		foe_top.position.x = -hp.x
+		foe_top.position.z = -hp.y
+		foe_top.spin = hspin
+		foe_top.wobble = hwob
+	if is_instance_valid(player_top) and player_top.alive:
+		player_top.position.x = -cp.x
+		player_top.position.z = -cp.y
+		player_top.spin = cspin
+		player_top.wobble = cwob
+
+
+@rpc("any_peer", "reliable")
+func _net_request_nudge(point: Vector2) -> void:
+	# point is already in HOST frame (the client negated it)
+	if not _net_is_host() or state != State.BATTLE:
+		return
+	if net_client_nudge_cd > 0.0:
+		return
+	if not is_instance_valid(foe_top) or not foe_top.alive or foe_top.spin <= NUDGE_SPIN_COST:
+		return
+	var dir: Vector3 = Vector3(point.x, 0.0, point.y) - foe_top.position
+	dir.y = 0.0
+	if dir.length() < 0.05:
+		return
+	dir = dir.normalized()
+	net_client_nudge_cd = NUDGE_COOLDOWN
+	foe_top.velocity += dir * NUDGE_POWER
+	foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
+	foe_top.flash_direction(dir)
+
+
+@rpc("authority", "reliable")
+func _net_hit_fx(contact: Vector2, strength: float) -> void:
+	_hit_effects(Vector3(-contact.x, 0.0, -contact.y), strength)
+	if is_instance_valid(player_top):
+		player_top.flash_accent()
+	if is_instance_valid(foe_top):
+		foe_top.flash_accent()
+
+
+@rpc("authority", "reliable")
+func _net_nudge_fx(dir: Vector2) -> void:
+	if is_instance_valid(foe_top):
+		foe_top.flash_direction(Vector3(-dir.x, 0.0, -dir.y))
+	_play_sfx(SND_NUDGE, -8.0, 0.2)
+
+
+@rpc("authority", "reliable", "call_local")
+func _net_round_over(host_reason: String, cli_reason: String, host_wins: bool) -> void:
+	if state != State.BATTLE:
+		return
+	var i_win: bool = host_wins if _net_is_host() else not host_wins
+	var my_reason: String = host_reason if _net_is_host() else cli_reason
+	var opp_reason: String = cli_reason if _net_is_host() else host_reason
+	_apply_round_result(my_reason, opp_reason, i_win)
+
+
+func _net_host_next_round() -> void:
+	if net_active and not net_ended and state == State.ROUND_OVER:
+		_net_next_round.rpc()
+
+
+@rpc("authority", "reliable", "call_local")
+func _net_next_round() -> void:
+	if state != State.ROUND_OVER:
+		return
+	_enter_state(State.CRAFT)
+
+
+func _net_teardown() -> void:
+	Online.leave_lobby() # idempotent
+	net_ended = false
+	net_opp_config = {}
+	net_ready_sent = false
+	net_wind_sent = false
+	net_opp_wind_in = false
+	net_my_wins = 0
+	net_opp_wins = 0
+	net_opp_name = ""
+	net_active = false
+	_reset_run()
+	_apply_language() # restores restart_button / foe_gauge texts
+	_enter_state(State.READY)
+
+
+func _on_mp_joined_lobby() -> void:
+	if Online.is_host:
+		return # host UI is driven by its own button handlers
+	if state != State.READY:
+		_enter_state(State.READY) # Steam invite accepted mid-run aborts the run
+	_show_menu_screen(MenuScreen.WAIT)
+	_set_wait_status(_t("connecting"), "", false)
+
+
+func _on_mp_player_connected(_pd: PlayerData) -> void:
+	if state != State.READY:
+		return
+	if Online.players.size() < 2:
+		return # self-registration echo — keep waiting
+	_set_wait_status(_t("opponent_found"), "", false)
+	if Online.is_host:
+		_net_start_match.rpc()
+
+
+func _on_mp_player_disconnected(pd: PlayerData) -> void:
+	if pd == Online.personal_player_data:
+		return # our own voluntary-leave echo
+	_handle_mp_loss(_t("mp_disconnected"))
+
+
+func _on_mp_server_disconnected() -> void:
+	_handle_mp_loss(_t("mp_server_lost"))
+
+
+func _on_mp_connection_failed() -> void:
+	if state == State.READY and menu_screen == MenuScreen.WAIT:
+		_show_menu_screen(MenuScreen.MP)
+		_show_menu_notice(_t("err_join_failed"))
+
+
+# debug: headless-ish autopilot so a second local instance can play a LAN duel
+# unattended (`godot --path . -- netbot-host` / `-- netbot-join`). Inert otherwise.
+func _netbot_init() -> void:
+	var args: PackedStringArray = OS.get_cmdline_user_args()
+	if "netbot-host" in args:
+		_netbot = true
+		_on_host_lan_pressed.call_deferred()
+	elif "netbot-join" in args:
+		_netbot = true
+		_on_join_lan_pressed.call_deferred()
+
+
+func _netbot_tick(delta: float) -> void:
+	_netbot_cd -= delta
+	if _netbot_cd > 0.0:
+		return
+	_netbot_cd = 0.8
+	if not net_active:
+		return
+	match state:
+		State.CRAFT:
+			if not net_ready_sent:
+				_on_fight_pressed()
+		State.WIND:
+			if net_wind_sent:
+				return
+			if not winding:
+				winding = true # charge through the real path: _physics_process ramps wind_power
+			elif wind_power >= 55.0:
+				winding = false
+				_net_release_wind()
+
+
+func _handle_mp_loss(msg: String) -> void:
+	if state == State.READY:
+		Online.leave_lobby()
+		if menu_screen == MenuScreen.WAIT:
+			_show_menu_screen(MenuScreen.MP)
+		_show_menu_notice(msg)
+	elif net_active and not net_ended:
+		net_ended = true # keep net_active true so no SP branch (AI) wakes up mid-teardown
+		Online.leave_lobby()
+		over_title.text = _t("opp_left")
+		over_title.add_theme_color_override("font_color", Color(1.0, 0.45, 0.3))
+		over_stats.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
+		restart_button.text = _t("back_menu")
+		_enter_state(State.OVER)
 
 
 # ---------------------------------------------------------------- widgets

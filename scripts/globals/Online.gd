@@ -1,6 +1,6 @@
 extends Node
 
-const MAX_PLAYERS: int = 12
+const MAX_PLAYERS: int = 2 # strict 1v1 duel
 
 enum ErrorCodes { NO_RESPONSE, SUCCESS, FAILED, CURRENTLY_BUSY, JOIN_FAILED_SAME_OWNER_ID, STEAM_CONNECTION_ERROR }
 
@@ -16,6 +16,7 @@ signal server_disconnected
 var is_busy: bool = false
 var is_host: bool = false
 var is_joining: bool = false
+var steam_ready: bool = false
 var steam_lobby_id: int = 0
 var players: Dictionary[int, PlayerData]: # Uses multiplayer ids as keys
 	get: players.sort(); return players
@@ -32,15 +33,18 @@ func _ready() -> void:
 	_setup_steam_multiplayer()
 	_setup_local_multiplayer()
 
-func _process(_delta: float) -> void: _process_steam_p2p_packets()
+func _process(_delta: float) -> void:
+	if steam_ready: _process_steam_p2p_packets()
 
 func leave_lobby() -> void:
 	is_host = false
 	if not steam_lobby_id and not multiplayer.has_multiplayer_peer(): return
-	Steam.leaveLobby(steam_lobby_id)
+	if steam_lobby_id: Steam.leaveLobby(steam_lobby_id)
 	if multiplayer.multiplayer_peer: multiplayer.multiplayer_peer.close()
+	multiplayer.multiplayer_peer = null
 	steam_lobby_id = 0
 	player_disconnected.emit(personal_player_data)
+	players.clear()
 
 
 func join_address(address: String, port: int = LOCAL_SERVER_PORT) -> ErrorCodes:
@@ -66,6 +70,7 @@ func _on_connection_failed() -> void:
 	is_host = false
 	steam_lobby_id = 0
 	multiplayer.multiplayer_peer = null
+	players.clear() # join_address registers self before the connection resolves
 	connection_failed.emit()
 
 func _on_peer_disconnected(id: int) -> void: _handle_peer_disconnection(id)
@@ -92,6 +97,10 @@ func _handle_peer_disconnection(peer_id: int) -> void:
 func _register_player_data(player_data_dict: Dictionary):
 	var player_data := PlayerData.from_dict(player_data_dict)
 	var mult_id := player_data.multiplayer_id
+	if is_host and not players.has(mult_id) and players.size() >= MAX_PLAYERS:
+		var over_sender := multiplayer.get_remote_sender_id()
+		if over_sender > 1: multiplayer.multiplayer_peer.disconnect_peer(over_sender)
+		return
 	if not players.has(mult_id):
 		players[player_data.multiplayer_id] = player_data
 		player_connected.emit.call_deferred(player_data)
@@ -105,12 +114,17 @@ func _register_player_data(player_data_dict: Dictionary):
 			if sender_id != 0 and sender_id != multiplayer.get_unique_id():
 				for data: PlayerData in players.values():
 					_register_player_data.rpc_id(sender_id,data.to_dict())
+			if players.size() >= MAX_PLAYERS and steam_lobby_id != 0:
+				Steam.setLobbyJoinable(steam_lobby_id, false)
 
 func _get_personal_player_data() -> PlayerData:
 	if not personal_player_data:
 		personal_player_data = PlayerData.new()
-		personal_player_data.steam_id = Steam.getSteamID()
-		personal_player_data.display_name = Steam.getPersonaName()
+		if steam_ready:
+			personal_player_data.steam_id = Steam.getSteamID()
+			personal_player_data.display_name = Steam.getPersonaName()
+		else:
+			personal_player_data.display_name = _get_os_user_name()
 	personal_player_data.multiplayer_id = 0 if not multiplayer.has_multiplayer_peer() else multiplayer.get_unique_id()
 	return personal_player_data
 
@@ -121,7 +135,11 @@ func _setup_steam_multiplayer() -> void:
 	multiplayer.server_relay = true
 	OS.set_environment("SteamAppID", str(STEAM_APP_ID))
 	OS.set_environment("SteamGameID", str(STEAM_APP_ID))
-	Steam.steamInit(false, STEAM_APP_ID) # For some reason the autocomplete for the values are inverted but this is the correct way for now.
+	Steam.steamInit(STEAM_APP_ID, true) # GodotSteam 4.17: (app_id, embed_callbacks) — embedded callbacks required, run_callbacks() is never called manually
+	steam_ready = Steam.isSteamRunning() and Steam.loggedOn()
+	if not steam_ready:
+		push_warning("Steam unavailable — Steam multiplayer disabled (LAN and single player unaffected).")
+		return
 	Steam.allowP2PPacketRelay(true)
 	Steam.lobby_created.connect(_on_steam_lobby_created)
 	Steam.lobby_joined.connect(_on_steam_lobby_join_response)
@@ -133,11 +151,11 @@ func _on_steam_lobby_created(connection_response: int, lobby_id: int) -> void:
 			steam_lobby_id = lobby_id
 			Steam.setLobbyJoinable(lobby_id, true)
 			_register_player_data(personal_player_data.to_dict())
-			_register_player_data(personal_player_data.to_dict())
 			lobby_hosting_response.emit.call_deferred(ErrorCodes.SUCCESS)
 		_: lobby_hosting_response.emit(ErrorCodes.FAILED)
 
 func host_steam_lobby() -> ErrorCodes:
+	if not steam_ready: return ErrorCodes.STEAM_CONNECTION_ERROR
 	if is_busy: return ErrorCodes.CURRENTLY_BUSY
 	is_host = false
 	is_busy = true
@@ -161,6 +179,7 @@ func host_steam_lobby() -> ErrorCodes:
 func _on_steam_join_requested(lobby_id: int, _steam_id: int) -> void: join_steam_lobby(lobby_id)
 
 func join_steam_lobby(lobby_id: int = 0) -> ErrorCodes:
+	if not steam_ready: return ErrorCodes.STEAM_CONNECTION_ERROR
 	if is_busy: return ErrorCodes.CURRENTLY_BUSY
 	is_joining = true
 	if lobby_id != steam_lobby_id and steam_lobby_id != 0: leave_lobby()
@@ -226,7 +245,7 @@ func host_local_lobby() -> ErrorCodes:
 	is_host = true
 	
 	var new_peer := ENetMultiplayerPeer.new()
-	var error := new_peer.create_server(LOCAL_SERVER_PORT, MAX_PLAYERS)
+	var error := new_peer.create_server(LOCAL_SERVER_PORT, MAX_PLAYERS - 1) # host occupies one player slot
 	match error:
 		OK:
 			multiplayer.multiplayer_peer = new_peer
@@ -235,6 +254,7 @@ func host_local_lobby() -> ErrorCodes:
 			return ErrorCodes.SUCCESS
 		_:
 			is_host = false
+			is_busy = false
 			return ErrorCodes.FAILED
 
 func join_local_lobby() -> ErrorCodes:
