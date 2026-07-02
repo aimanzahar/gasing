@@ -24,6 +24,8 @@ var wobble: float = 0.0
 var pending_elimination: String = ""
 
 var _spin_node: Node3D = null
+var _dir_arrow: Node3D = null
+var _arrow_tween: Tween = null
 var _mesh: MeshInstance3D = null
 var _body_mat: StandardMaterial3D = null
 var _accent_mat: StandardMaterial3D = null
@@ -71,12 +73,62 @@ func _build_visual() -> void:
 		_mesh.set_surface_override_material(0, _body_mat)
 		if _mesh.mesh != null and _mesh.mesh.get_surface_count() > 1:
 			_mesh.set_surface_override_material(1, _accent_mat)
+	_build_dir_arrow()
 	var hl_mat: StandardMaterial3D = StandardMaterial3D.new()
 	hl_mat.albedo_color = accent_color
 	hl_mat.emission_enabled = true
 	hl_mat.emission = accent_color
 	hl_mat.emission_energy_multiplier = 2.2
 	_highlight.set_surface_override_material(0, hl_mat)
+
+
+func _build_dir_arrow() -> void:
+	if _dir_arrow != null:
+		_dir_arrow.queue_free()
+	_dir_arrow = Node3D.new()
+	add_child(_dir_arrow)
+	var arrow_mat: StandardMaterial3D = StandardMaterial3D.new()
+	arrow_mat.albedo_color = accent_color
+	arrow_mat.emission_enabled = true
+	arrow_mat.emission = accent_color
+	arrow_mat.emission_energy_multiplier = 2.5
+	var shaft: MeshInstance3D = MeshInstance3D.new()
+	var shaft_mesh: BoxMesh = BoxMesh.new()
+	shaft_mesh.size = Vector3(0.07, 0.02, 0.7)
+	shaft.mesh = shaft_mesh
+	shaft.position = Vector3(0.0, 0.06, -0.8)
+	shaft.material_override = arrow_mat
+	_dir_arrow.add_child(shaft)
+	var head: MeshInstance3D = MeshInstance3D.new()
+	var head_mesh: CylinderMesh = CylinderMesh.new()
+	head_mesh.top_radius = 0.0
+	head_mesh.bottom_radius = 0.12
+	head_mesh.height = 0.28
+	head.mesh = head_mesh
+	head.position = Vector3(0.0, 0.06, -1.25)
+	head.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	head.material_override = arrow_mat
+	_dir_arrow.add_child(head)
+	_dir_arrow.visible = false
+
+
+func flash_direction(dir: Vector3) -> void:
+	if _dir_arrow == null:
+		return
+	var flat: Vector3 = Vector3(dir.x, 0.0, dir.z)
+	if flat.length() < 0.01:
+		return
+	flat = flat.normalized()
+	_dir_arrow.rotation.y = atan2(-flat.x, -flat.z)
+	if _arrow_tween != null and _arrow_tween.is_valid():
+		_arrow_tween.kill()
+	_dir_arrow.visible = true
+	_dir_arrow.scale = Vector3(0.5, 0.5, 0.5)
+	_arrow_tween = create_tween()
+	_arrow_tween.tween_property(_dir_arrow, "scale", Vector3.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_arrow_tween.tween_interval(0.3)
+	_arrow_tween.tween_property(_dir_arrow, "scale", Vector3(0.05, 0.05, 0.05), 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_arrow_tween.tween_callback(_dir_arrow.hide)
 
 
 func _find_mesh(node: Node) -> MeshInstance3D:
@@ -128,6 +180,8 @@ func die(reason: String) -> void:
 	alive = false
 	battling = false
 	_highlight.visible = false
+	if _dir_arrow != null:
+		_dir_arrow.visible = false
 	var tw: Tween = create_tween()
 	if reason == "topple":
 		var fall: Vector3 = _visual.rotation

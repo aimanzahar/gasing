@@ -3,6 +3,9 @@ extends Node3D
 enum State { READY, CRAFT, WIND, LAUNCH, BATTLE, ROUND_OVER, OVER }
 
 const GASING_SCENE: PackedScene = preload("res://gasing.tscn")
+const NUDGE_POWER: float = 1.6
+const NUDGE_SPIN_COST: float = 2.0
+const NUDGE_COOLDOWN: float = 0.35
 const PLAYER_COLOR: Color = Color(1.0, 0.78, 0.25)
 const FOE_COLOR: Color = Color(0.2, 0.85, 0.8)
 const TEXT_COLOR: Color = Color(0.96, 0.9, 0.78)
@@ -65,6 +68,7 @@ const STRINGS: Dictionary = {
 		"stat_spin": "Spin",
 		"stat_balance": "Balance",
 		"meter": "WIND",
+		"battle_hint": "Click the arena to push your gasing — each push costs spin!",
 		"tip_merbau": "Merbau — dense heartwood.\n+0.3 Mass: your strikes shove rivals harder\nand this top resists knockback.",
 		"tip_kemuning": "Kemuning — fine golden wood.\n+7 Balance: wobbles later as spin fades\nand resists toppling when struck.",
 		"tip_besi": "Besi — a heavy iron core.\n+0.5 Mass: much harder pangkah strikes.",
@@ -109,6 +113,7 @@ const STRINGS: Dictionary = {
 		"stat_spin": "Pusingan",
 		"stat_balance": "Imbangan",
 		"meter": "PUSING",
+		"battle_hint": "Klik gelanggang untuk tolak gasingmu — setiap tolakan makan pusingan!",
 		"tip_merbau": "Merbau — teras kayu padat.\n+0.3 Jisim: pangkah anda lebih kuat\ndan gasing lebih tahan tolakan.",
 		"tip_kemuning": "Kemuning — kayu halus keemasan.\n+7 Imbangan: lambat goyang bila pusingan susut\ndan tahan tumbang bila dipangkah.",
 		"tip_besi": "Besi — teras besi berat.\n+0.5 Jisim: pangkah jauh lebih kuat.",
@@ -128,6 +133,8 @@ var wind_power: float = 0.0
 var winding: bool = false
 var aim_angle: float = 0.0
 var hit_cooldown: float = 0.0
+var nudge_cooldown: float = 0.0
+var _marker_tween: Tween = null
 var last_striker: String = ""
 var last_wind_effectiveness: float = 0.0
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
@@ -139,6 +146,7 @@ var over_panel: Control = null
 var hud: Control = null
 var wind_meter: WindMeter = null
 var wind_hint: Label = null
+var battle_hint: Label = null
 var player_gauge: SpinGauge = null
 var foe_gauge: SpinGauge = null
 var duel_label: Label = null
@@ -164,12 +172,19 @@ var lang_buttons: Dictionary = {}
 @onready var camera: Camera3D = $Camera3D
 @onready var aim_arrow: Node3D = $AimArrow
 @onready var burst: CPUParticles3D = $HitBurst
+@onready var click_marker: MeshInstance3D = $ClickMarker
 @onready var ui: CanvasLayer = $UI
 
 
 func _ready() -> void:
 	_rng.randomize()
 	aim_arrow.visible = false
+	var earth: MeshInstance3D = get_node_or_null("Environment3D/EnvEarth") as MeshInstance3D
+	if earth != null:
+		var earth_mat: StandardMaterial3D = StandardMaterial3D.new()
+		earth_mat.albedo_color = Color(0.38, 0.26, 0.13)
+		earth_mat.roughness = 1.0
+		earth.set_surface_override_material(0, earth_mat)
 	_configure_burst()
 	_build_ui()
 	_reset_run()
@@ -198,6 +213,7 @@ func _enter_state(next: State) -> void:
 		State.WIND:
 			_show_panel(null)
 			_set_hud_visible(true)
+			battle_hint.visible = false
 			player_gauge.visible = false
 			foe_gauge.visible = false
 			wind_meter.visible = true
@@ -220,6 +236,7 @@ func _enter_state(next: State) -> void:
 		State.BATTLE:
 			player_gauge.visible = true
 			foe_gauge.visible = true
+			battle_hint.visible = true
 		State.ROUND_OVER:
 			pass
 		State.OVER:
@@ -234,6 +251,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _is_advance_input(event):
 				get_viewport().set_input_as_handled()
 				_enter_state(State.CRAFT)
+		State.BATTLE:
+			var click: InputEventMouseButton = event as InputEventMouseButton
+			if click != null and click.pressed and click.button_index == MOUSE_BUTTON_LEFT:
+				_try_nudge(click.position)
 		State.WIND:
 			if event.is_action_pressed("wind"):
 				winding = true
@@ -267,6 +288,7 @@ func _physics_process(delta: float) -> void:
 	if state != State.BATTLE:
 		return
 	hit_cooldown = maxf(hit_cooldown - delta, 0.0)
+	nudge_cooldown = maxf(nudge_cooldown - delta, 0.0)
 	var p_ok: bool = is_instance_valid(player_top) and player_top.alive
 	var f_ok: bool = is_instance_valid(foe_top) and foe_top.alive
 	if p_ok and f_ok:
@@ -317,10 +339,45 @@ func _do_launch() -> void:
 	foe_top.launch(foe_dir, foe_eff)
 	last_striker = ""
 	hit_cooldown = 0.0
+	nudge_cooldown = 0.0
 	_enter_state(State.BATTLE)
 
 
 # ---------------------------------------------------------------- battle
+
+func _try_nudge(screen_pos: Vector2) -> void:
+	if nudge_cooldown > 0.0:
+		return
+	if not is_instance_valid(player_top) or not player_top.alive or player_top.spin <= NUDGE_SPIN_COST:
+		return
+	var origin: Vector3 = camera.project_ray_origin(screen_pos)
+	var normal: Vector3 = camera.project_ray_normal(screen_pos)
+	var hit: Variant = Plane(Vector3.UP, 0.0).intersects_ray(origin, normal)
+	if hit == null:
+		return
+	var point: Vector3 = hit
+	var dir: Vector3 = point - player_top.position
+	dir.y = 0.0
+	if dir.length() < 0.05:
+		return
+	dir = dir.normalized()
+	nudge_cooldown = NUDGE_COOLDOWN
+	player_top.velocity += dir * NUDGE_POWER
+	player_top.spin = maxf(player_top.spin - NUDGE_SPIN_COST, 0.0)
+	player_top.flash_direction(dir)
+	_flash_click_marker(point)
+
+
+func _flash_click_marker(point: Vector3) -> void:
+	click_marker.position = Vector3(point.x, 0.03, point.z)
+	click_marker.visible = true
+	click_marker.scale = Vector3(1.5, 1.5, 1.5)
+	if _marker_tween != null and _marker_tween.is_valid():
+		_marker_tween.kill()
+	_marker_tween = create_tween()
+	_marker_tween.tween_property(click_marker, "scale", Vector3(0.45, 0.45, 0.45), 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_marker_tween.tween_callback(click_marker.hide)
+
 
 func _ai_nudge(delta: float) -> void:
 	var opp: Dictionary = OPPONENTS[duel_index]
@@ -407,6 +464,7 @@ func _toast_elimination(top: Gasing, reason: String) -> void:
 
 func _finish_duel(player_wins: bool) -> void:
 	state = State.ROUND_OVER
+	battle_hint.visible = false
 	player_gauge.wobbling = false
 	foe_gauge.wobbling = false
 	var opp: Dictionary = OPPONENTS[duel_index]
@@ -587,6 +645,7 @@ func _apply_language() -> void:
 	ready_fact.text = _t("fact")
 	ready_prompt.text = _t("prompt")
 	wind_hint.text = _t("wind_hint")
+	battle_hint.text = _t("battle_hint")
 	wind_meter.label_text = _t("meter")
 	player_gauge.title = _t("gauge_you")
 	foe_gauge.title = _t("gauge_foe")
@@ -756,6 +815,16 @@ func _build_ui() -> void:
 	wind_hint.offset_bottom = -16.0
 	wind_hint.visible = false
 	hud.add_child(wind_hint)
+
+	battle_hint = _mk_label("", 15)
+	battle_hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	battle_hint.offset_left = -420.0
+	battle_hint.offset_right = 420.0
+	battle_hint.offset_top = -40.0
+	battle_hint.offset_bottom = -14.0
+	battle_hint.modulate = Color(1.0, 1.0, 1.0, 0.75)
+	battle_hint.visible = false
+	hud.add_child(battle_hint)
 
 	_build_ready_panel()
 	_build_craft_panel()
