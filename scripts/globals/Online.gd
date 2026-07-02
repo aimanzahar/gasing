@@ -47,11 +47,16 @@ func leave_lobby() -> void:
 	players.clear()
 
 
+func _has_active_peer() -> bool:
+	var peer := multiplayer.multiplayer_peer
+	return peer != null and not (peer is OfflineMultiplayerPeer)
+
+
 func join_address(address: String, port: int = LOCAL_SERVER_PORT) -> ErrorCodes:
 	if is_busy: return ErrorCodes.CURRENTLY_BUSY
-	is_host = false
 	var response: ErrorCodes = ErrorCodes.FAILED
-	if is_host or steam_lobby_id != 0: leave_lobby()
+	if is_host or steam_lobby_id != 0 or _has_active_peer(): leave_lobby()
+	is_host = false
 	var new_multiplayer_peer := ENetMultiplayerPeer.new()
 	var error := new_multiplayer_peer.create_client(address, port)
 	is_busy = false
@@ -68,6 +73,7 @@ func _on_connected_to_server() -> void: _register_player_data.rpc_id(1,personal_
 
 func _on_connection_failed() -> void:
 	is_host = false
+	if steam_lobby_id != 0: Steam.leaveLobby(steam_lobby_id) # else we stay a ghost member of the 2-slot lobby
 	steam_lobby_id = 0
 	multiplayer.multiplayer_peer = null
 	players.clear() # join_address registers self before the connection resolves
@@ -141,6 +147,7 @@ func _setup_steam_multiplayer() -> void:
 		push_warning("Steam unavailable — Steam multiplayer disabled (LAN and single player unaffected).")
 		return
 	Steam.allowP2PPacketRelay(true)
+	Steam.initRelayNetworkAccess() # warm up SDR early — P2P listen sockets can fail before relay access is ready
 	Steam.lobby_created.connect(_on_steam_lobby_created)
 	Steam.lobby_joined.connect(_on_steam_lobby_join_response)
 	Steam.join_requested.connect(_on_steam_join_requested)
@@ -182,7 +189,8 @@ func join_steam_lobby(lobby_id: int = 0) -> ErrorCodes:
 	if not steam_ready: return ErrorCodes.STEAM_CONNECTION_ERROR
 	if is_busy: return ErrorCodes.CURRENTLY_BUSY
 	is_joining = true
-	if lobby_id != steam_lobby_id and steam_lobby_id != 0: leave_lobby()
+	# leave any existing session — Steam lobby OR a live ENet/LAN session
+	if (lobby_id != steam_lobby_id and steam_lobby_id != 0) or _has_active_peer(): leave_lobby()
 	is_host = false
 	steam_lobby_id = lobby_id
 	is_busy = true
@@ -241,6 +249,7 @@ func _setup_local_multiplayer() -> void:
 
 func host_local_lobby() -> ErrorCodes:
 	if is_busy: return ErrorCodes.CURRENTLY_BUSY
+	if is_host and _has_active_peer(): return ErrorCodes.CURRENTLY_BUSY # already hosting; a re-entry would clobber is_host
 	is_busy = true
 	is_host = true
 	

@@ -271,6 +271,7 @@ var wait_title: Label = null
 var wait_info: Label = null
 var invite_button: Button = null
 var wait_cancel_button: Button = null
+var over_menu_button: Button = null
 
 var net_active: bool = false
 var net_ended: bool = false
@@ -312,6 +313,7 @@ func _ready() -> void:
 	Online.player_disconnected.connect(_on_mp_player_disconnected)
 	Online.server_disconnected.connect(_on_mp_server_disconnected)
 	Online.connection_failed.connect(_on_mp_connection_failed)
+	Online.lobby_join_response.connect(_on_mp_steam_join_response)
 	_reset_run()
 	_apply_language()
 	_enter_state(State.READY)
@@ -375,6 +377,7 @@ func _enter_state(next: State) -> void:
 		State.OVER:
 			_clear_tops()
 			_set_hud_visible(false)
+			over_menu_button.visible = not net_active # in MP the restart button IS back-to-menu
 			_show_panel(over_panel)
 
 
@@ -766,6 +769,14 @@ func _on_restart_pressed() -> void:
 	_restart_run()
 
 
+func _on_over_menu_pressed() -> void:
+	if net_active:
+		_net_teardown()
+		return
+	_reset_run()
+	_enter_state(State.READY)
+
+
 func _on_fight_pressed() -> void:
 	if net_active:
 		if net_ready_sent:
@@ -939,6 +950,7 @@ func _apply_language() -> void:
 	mp_back_button.text = _t("back")
 	invite_button.text = _t("invite_friend")
 	wait_cancel_button.text = _t("cancel")
+	over_menu_button.text = _t("back_menu")
 	for id: String in shape_cards:
 		var card: Dictionary = shape_cards[id]
 		var role: Label = card.role
@@ -1490,6 +1502,11 @@ func _build_over_panel() -> void:
 	var rb_wrap: CenterContainer = CenterContainer.new()
 	rb_wrap.add_child(restart_button)
 	v.add_child(rb_wrap)
+	over_menu_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	over_menu_button.pressed.connect(_on_over_menu_pressed)
+	var om_wrap: CenterContainer = CenterContainer.new()
+	om_wrap.add_child(over_menu_button)
+	v.add_child(om_wrap)
 	over_hint = _mk_label("", 13, Color(0.75, 0.66, 0.52))
 	v.add_child(over_hint)
 
@@ -1559,6 +1576,7 @@ func _net_setup() -> void:
 	for pd: PlayerData in Online.players.values():
 		if pd.multiplayer_id != multiplayer.get_unique_id():
 			net_opp_name = pd.display_name
+			break # first non-self entry (host sorts first); ignore any stale duplicates
 	_reset_run()
 	materials_owned = {"merbau": 1, "kemuning": 1, "besi": 1} # fixed symmetric MP budget, no awards
 	foe_gauge.title = net_opp_name
@@ -1655,7 +1673,9 @@ func _net_request_nudge(point: Vector2) -> void:
 	if dir.length() < 0.05:
 		return
 	dir = dir.normalized()
-	net_client_nudge_cd = NUDGE_COOLDOWN
+	# shorter than the client's own 0.35s gate: arrival-time jitter must not eat pushes
+	# the client already rate-limited (and showed optimistic FX for) at send time
+	net_client_nudge_cd = NUDGE_COOLDOWN * 0.8
 	foe_top.velocity += dir * NUDGE_POWER
 	foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
 	foe_top.flash_direction(dir)
@@ -1700,6 +1720,7 @@ func _net_next_round() -> void:
 
 
 func _net_teardown() -> void:
+	net_ended = true # swallow our own player_disconnected echo during leave_lobby
 	Online.leave_lobby() # idempotent
 	net_ended = false
 	net_opp_config = {}
@@ -1719,6 +1740,7 @@ func _on_mp_joined_lobby() -> void:
 	if Online.is_host:
 		return # host UI is driven by its own button handlers
 	if state != State.READY:
+		_reset_run() # abort the SP run for real — stale duel/materials must not resume later
 		_enter_state(State.READY) # Steam invite accepted mid-run aborts the run
 	_show_menu_screen(MenuScreen.WAIT)
 	_set_wait_status(_t("connecting"), "", false)
@@ -1736,7 +1758,11 @@ func _on_mp_player_connected(_pd: PlayerData) -> void:
 
 func _on_mp_player_disconnected(pd: PlayerData) -> void:
 	if pd == Online.personal_player_data:
-		return # our own voluntary-leave echo
+		# our own leave echo: a teardown we started is already handling it, unless an
+		# external flow (e.g. accepting a Steam invite mid-match) pulled us out
+		if net_active and not net_ended:
+			_net_teardown()
+		return
 	_handle_mp_loss(_t("mp_disconnected"))
 
 
@@ -1748,6 +1774,18 @@ func _on_mp_connection_failed() -> void:
 	if state == State.READY and menu_screen == MenuScreen.WAIT:
 		_show_menu_screen(MenuScreen.MP)
 		_show_menu_notice(_t("err_join_failed"))
+
+
+func _on_mp_steam_join_response(code: int) -> void:
+	# invite-accept failures (lobby full) otherwise produce zero feedback
+	if code == Online.ErrorCodes.SUCCESS:
+		return
+	if Online.is_host or Online.is_busy:
+		return # hosting: entering our own lobby echoes as JOIN_FAILED_SAME_OWNER_ID — not a join failure
+	if state == State.READY:
+		if menu_screen == MenuScreen.WAIT:
+			_show_menu_screen(MenuScreen.MP)
+		_show_menu_notice(_t("err_join_steam"))
 
 
 # debug: headless-ish autopilot so a second local instance can play a LAN duel
