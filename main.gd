@@ -3,7 +3,8 @@ extends Node3D
 enum State { READY, CRAFT, WIND, LAUNCH, BATTLE, ROUND_OVER, OVER }
 
 const GASING_SCENE: PackedScene = preload("res://gasing.tscn")
-const NUDGE_POWER: float = 1.6
+const NUDGE_POWER: float = 2.4
+const MAX_IMPULSE: float = 6.0
 const NUDGE_SPIN_COST: float = 2.0
 const NUDGE_COOLDOWN: float = 0.35
 const PLAYER_COLOR: Color = Color(1.0, 0.78, 0.25)
@@ -134,6 +135,7 @@ var winding: bool = false
 var aim_angle: float = 0.0
 var hit_cooldown: float = 0.0
 var nudge_cooldown: float = 0.0
+var ai_think_timer: float = 1.0
 var _marker_tween: Tween = null
 var last_striker: String = ""
 var last_wind_effectiveness: float = 0.0
@@ -292,7 +294,7 @@ func _physics_process(delta: float) -> void:
 	var p_ok: bool = is_instance_valid(player_top) and player_top.alive
 	var f_ok: bool = is_instance_valid(foe_top) and foe_top.alive
 	if p_ok and f_ok:
-		_ai_nudge(delta)
+		_ai_think(delta)
 		_check_collision()
 	_update_gauges()
 	_resolve_eliminations()
@@ -340,6 +342,7 @@ func _do_launch() -> void:
 	last_striker = ""
 	hit_cooldown = 0.0
 	nudge_cooldown = 0.0
+	ai_think_timer = 1.2
 	_enter_state(State.BATTLE)
 
 
@@ -379,15 +382,39 @@ func _flash_click_marker(point: Vector3) -> void:
 	_marker_tween.tween_callback(click_marker.hide)
 
 
-func _ai_nudge(delta: float) -> void:
+func _ai_think(delta: float) -> void:
 	var opp: Dictionary = OPPONENTS[duel_index]
+	# continuous gentle drift (must beat the 0.8 friction decel or the AI never moves once parked)
 	var target: Vector3 = player_top.position if opp.aggressive else Vector3.ZERO
 	var to_target: Vector3 = target - foe_top.position
 	to_target.y = 0.0
 	if to_target.length() > 0.2:
-		# nudge must beat the 0.8 friction decel or the AI can never move once parked
 		var strength: float = 1.6 if opp.aggressive else 0.95
 		foe_top.velocity += to_target.normalized() * strength * delta
+	# decisive pushes on a think timer — the AI plays by the player's push rules
+	ai_think_timer -= delta
+	if ai_think_timer > 0.0:
+		return
+	ai_think_timer = maxf(1.5 - 0.22 * float(duel_index), 0.5) + _rng.randf_range(-0.2, 0.3)
+	if foe_top.spin < NUDGE_SPIN_COST * 4.0:
+		return
+	var push_dir: Vector3 = Vector3.ZERO
+	var foe_dist: float = Vector2(foe_top.position.x, foe_top.position.z).length()
+	var to_player: Vector3 = player_top.position - foe_top.position
+	to_player.y = 0.0
+	if foe_dist > 3.0:
+		push_dir = -foe_top.position
+	elif opp.aggressive or player_top.wobble > 0.0:
+		push_dir = (player_top.position + player_top.velocity * 0.3) - foe_top.position
+	elif not opp.aggressive and to_player.length() < 2.0:
+		push_dir = -to_player.rotated(Vector3.UP, _rng.randf_range(-0.6, 0.6))
+	push_dir.y = 0.0
+	if push_dir.length() < 0.05:
+		return
+	push_dir = push_dir.normalized()
+	foe_top.velocity += push_dir * NUDGE_POWER
+	foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
+	foe_top.flash_direction(push_dir)
 
 
 func _check_collision() -> void:
@@ -399,8 +426,11 @@ func _check_collision() -> void:
 		return
 	hit_cooldown = 0.3
 	var dir: Vector3 = diff.normalized() if diff.length() > 0.001 else Vector3.FORWARD
-	var imp_on_foe: float = 0.02 * player_top.spin * (player_top.mass / foe_top.mass)
-	var imp_on_player: float = 0.02 * foe_top.spin * (foe_top.mass / player_top.mass)
+	# charging into the hit transfers momentum — a ram knocks far harder than a drift
+	var charge_p: float = maxf(player_top.velocity.dot(dir), 0.0)
+	var charge_f: float = maxf(-foe_top.velocity.dot(dir), 0.0)
+	var imp_on_foe: float = minf(0.02 * player_top.spin * (player_top.mass / foe_top.mass) + charge_p * 1.3 * (player_top.mass / foe_top.mass), MAX_IMPULSE)
+	var imp_on_player: float = minf(0.02 * foe_top.spin * (foe_top.mass / player_top.mass) + charge_f * 1.3 * (foe_top.mass / player_top.mass), MAX_IMPULSE)
 	foe_top.apply_hit(dir, imp_on_foe, imp_on_foe * 2.5)
 	player_top.apply_hit(-dir, imp_on_player, imp_on_player * 2.5)
 	var overlap: float = min_d - diff.length()
