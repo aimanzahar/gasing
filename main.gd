@@ -965,7 +965,9 @@ func _style_unlock_index(style_id: String) -> int:
 
 
 func _style_battle_stats(id: String) -> Dictionary:
-	var s: Dictionary = (player_shapes[id] as Dictionary).duplicate()
+	# MP is equal-footing: always fight with each style's base stats, never the forged workshop build.
+	var src: Dictionary = STYLE_DEFS[id] if net_active else player_shapes[id]
+	var s: Dictionary = {"mass": src.mass, "spin_reserve": src.spin_reserve, "balance": src.balance}
 	s["mesh"] = STYLE_DEFS[id].mesh
 	return s
 
@@ -1103,6 +1105,7 @@ func _on_shape_selected(id: String) -> void:
 
 
 func _on_material_pressed(mat_id: String) -> void:
+	if net_active: return # MP is equal-footing; forging is disabled
 	var def: Dictionary = MATERIAL_DEFS[mat_id]
 	if materials_owned.get(mat_id, 0) <= 0:
 		craft_info.text = _t("no_mat") % def.label
@@ -1176,6 +1179,8 @@ func _camera_nudge() -> void:
 
 func _toast(text: String, color: Color, world_pos: Vector3, big: bool) -> void:
 	var l: Label = _mk_label(text, 40 if big else 24, color)
+	l.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	l.add_theme_constant_override("outline_size", 4)
 	l.size = Vector2(500.0, 50.0)
 	l.pivot_offset = Vector2(250.0, 25.0)
 	var screen: Vector2 = camera.unproject_position(world_pos + Vector3(0.0, 0.8, 0.0))
@@ -1933,14 +1938,16 @@ func _refresh_craft() -> void:
 		var opp: Dictionary = OPPONENTS[mini(duel_index, OPPONENTS.size() - 1)]
 		craft_duel_label.text = _t("craft_duel_line") % [mini(duel_index + 1, OPPONENTS.size()), OPPONENTS.size(), opp.name]
 	craft_sub.visible = net_active
+	craft_mats_hint.visible = not net_active # MP is equal-footing: no forging
 	for mat_id: String in MATERIAL_DEFS:
 		var mb: Button = material_buttons[mat_id]
+		mb.visible = not net_active
 		var def: Dictionary = MATERIAL_DEFS[mat_id]
 		mb.text = "%s ×%d\n%s" % [def.label, materials_owned.get(mat_id, 0), _t("desc_" + mat_id)]
 	for id: String in shape_cards:
 		var card: Dictionary = shape_cards[id]
-		var stats: Dictionary = player_shapes[id]
 		var base: Dictionary = STYLE_DEFS[id]
+		var stats: Dictionary = base if net_active else player_shapes[id] # MP shows base = what you fight with
 		var locked: bool = not unlocked_styles.has(id)
 		_tween_bar(card.mass, (stats.mass - 1.4) / 1.6)
 		_tween_bar(card.spin_reserve, (stats.spin_reserve - 60.0) / 50.0)
@@ -1990,10 +1997,12 @@ func _net_sim_authority() -> bool:
 
 
 func _net_my_config() -> Dictionary:
+	# MP is equal-footing: send base stats, matching _style_battle_stats (else the peers desync).
+	var base: Dictionary = STYLE_DEFS[selected_shape]
 	return {
 		"name": Online.personal_player_data.display_name,
 		"shape": selected_shape,
-		"stats": (player_shapes[selected_shape] as Dictionary).duplicate(),
+		"stats": {"mass": base.mass, "spin_reserve": base.spin_reserve, "balance": base.balance},
 	}
 
 
