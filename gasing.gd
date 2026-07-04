@@ -66,12 +66,16 @@ func _build_visual() -> void:
 	_mesh = _find_mesh(inst)
 	_body_mat = StandardMaterial3D.new()
 	_body_mat.albedo_color = Color(0.42, 0.24, 0.11)
-	_body_mat.roughness = 0.5
+	_body_mat.roughness = 0.62
+	_body_mat.normal_enabled = true
+	_body_mat.normal_texture = _wood_grain_normal()
+	_body_mat.uv1_triplanar = true # lathe mesh has no UVs; project grain from local axes
+	_body_mat.uv1_scale = Vector3(2.4, 2.4, 2.4)
 	_accent_mat = StandardMaterial3D.new()
 	_accent_mat.albedo_color = accent_color
 	_accent_mat.emission_enabled = true
 	_accent_mat.emission = accent_color
-	_accent_mat.emission_energy_multiplier = 1.6
+	_accent_mat.emission_energy_multiplier = 0.5 # painted lacquer trim, not neon (flash spikes on hit)
 	if _mesh != null:
 		_mesh.set_surface_override_material(0, _body_mat)
 		if _mesh.mesh != null and _mesh.mesh.get_surface_count() > 1:
@@ -134,6 +138,18 @@ func flash_direction(dir: Vector3) -> void:
 	_arrow_tween.tween_callback(_dir_arrow.hide)
 
 
+func _wood_grain_normal() -> NoiseTexture2D:
+	var n: FastNoiseLite = FastNoiseLite.new()
+	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	n.frequency = 0.9
+	var t: NoiseTexture2D = NoiseTexture2D.new()
+	t.noise = n
+	t.seamless = true
+	t.as_normal_map = true
+	t.bump_strength = 1.1
+	return t
+
+
 func _find_mesh(node: Node) -> MeshInstance3D:
 	if node is MeshInstance3D:
 		return node
@@ -174,7 +190,7 @@ func flash_accent() -> void:
 		return
 	var tw: Tween = create_tween()
 	tw.tween_property(_accent_mat, "emission_energy_multiplier", 5.5, 0.06)
-	tw.tween_property(_accent_mat, "emission_energy_multiplier", 1.6, 0.4)
+	tw.tween_property(_accent_mat, "emission_energy_multiplier", 0.5, 0.4)
 
 
 func die(reason: String) -> void:

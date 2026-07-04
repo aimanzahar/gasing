@@ -347,6 +347,7 @@ var wait_info: Label = null
 var invite_button: Button = null
 var wait_cancel_button: Button = null
 var over_menu_button: Button = null
+var craft_back_button: Button = null
 
 var net_active: bool = false
 var net_ended: bool = false
@@ -379,12 +380,7 @@ func _ready() -> void:
 	_rng.randomize()
 	_build_sfx_pool()
 	aim_arrow.visible = false
-	var earth: MeshInstance3D = get_node_or_null("Environment3D/EnvEarth") as MeshInstance3D
-	if earth != null:
-		var earth_mat: StandardMaterial3D = StandardMaterial3D.new()
-		earth_mat.albedo_color = Color(0.38, 0.26, 0.13)
-		earth_mat.roughness = 1.0
-		earth.set_surface_override_material(0, earth_mat)
+	_polish_visuals()
 	_configure_burst()
 	_build_ui()
 	Online.joined_lobby.connect(_on_mp_joined_lobby)
@@ -398,6 +394,142 @@ func _ready() -> void:
 	_apply_language()
 	_enter_state(State.READY)
 	_netbot_init()
+
+
+func _polish_visuals() -> void:
+	# Warm dusk sky (free IBL + horizon), SSAO to ground the low-poly shapes, subtle SSIL,
+	# warm depth fog, tamed glow, AgX tonemap. Turns the flat "mud tent" into an atmospheric arena.
+	var we: WorldEnvironment = get_node_or_null("WorldEnvironment") as WorldEnvironment
+	if we != null and we.environment != null:
+		var env: Environment = we.environment
+		var sky_mat: ProceduralSkyMaterial = ProceduralSkyMaterial.new()
+		sky_mat.sky_top_color = Color(0.30, 0.28, 0.40)
+		sky_mat.sky_horizon_color = Color(0.86, 0.52, 0.30)
+		sky_mat.sky_curve = 0.15
+		sky_mat.ground_horizon_color = Color(0.55, 0.35, 0.20)
+		sky_mat.ground_bottom_color = Color(0.24, 0.15, 0.09)
+		sky_mat.sun_angle_max = 25.0
+		var sky: Sky = Sky.new()
+		sky.sky_material = sky_mat
+		env.background_mode = Environment.BG_SKY
+		env.sky = sky
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		env.ambient_light_sky_contribution = 1.0
+		env.ambient_light_energy = 0.9
+		env.ssao_enabled = true
+		env.ssao_radius = 0.7
+		env.ssao_intensity = 3.5
+		env.ssao_power = 1.6
+		env.ssil_enabled = true
+		env.ssil_intensity = 0.6
+		env.fog_enabled = true
+		env.fog_light_color = Color(0.72, 0.52, 0.36)
+		env.fog_density = 0.008
+		env.fog_sky_affect = 0.2
+		env.glow_enabled = true
+		env.glow_intensity = 0.3
+		env.glow_bloom = 0.1
+		env.glow_hdr_threshold = 1.2
+		env.tonemap_mode = Environment.TONE_MAPPER_AGX
+		env.tonemap_exposure = 1.05
+
+	var sun: DirectionalLight3D = get_node_or_null("Sun") as DirectionalLight3D
+	if sun != null:
+		sun.light_energy = 1.05
+		sun.light_color = Color(1.0, 0.86, 0.66)
+		sun.light_angular_distance = 2.0 # soft shadow penumbra
+		sun.shadow_enabled = true
+		sun.shadow_blur = 1.5
+
+	# Cool fill from the opposite side so low-poly forms read as 3D, not flat silhouettes.
+	var fill: DirectionalLight3D = DirectionalLight3D.new()
+	fill.name = "FillLight"
+	fill.light_color = Color(0.55, 0.66, 0.90)
+	fill.light_energy = 0.35
+	fill.shadow_enabled = false
+	fill.rotation_degrees = Vector3(-25.0, 150.0, 0.0)
+	add_child(fill)
+
+	# Dirt surface relief on the surrounding earth + tan arena floor (procedural, no texture files).
+	var dirt_normal: NoiseTexture2D = _make_noise_normal(0.06, 2.5)
+	var earth_mat: StandardMaterial3D = StandardMaterial3D.new()
+	earth_mat.albedo_color = Color(0.38, 0.26, 0.13)
+	earth_mat.roughness = 1.0
+	earth_mat.normal_enabled = true
+	earth_mat.normal_texture = dirt_normal
+	earth_mat.normal_scale = 1.2
+	earth_mat.uv1_scale = Vector3(14.0, 14.0, 14.0)
+	for p: String in ["Environment3D/EnvEarth", "Environment3D/EnvEarth2"]:
+		var n: MeshInstance3D = get_node_or_null(p) as MeshInstance3D
+		if n != null:
+			n.set_surface_override_material(0, earth_mat)
+	var floor_node: MeshInstance3D = get_node_or_null("Floor") as MeshInstance3D
+	if floor_node != null:
+		var floor_mat: StandardMaterial3D = StandardMaterial3D.new()
+		floor_mat.albedo_color = Color(0.54, 0.35, 0.17)
+		floor_mat.roughness = 0.92
+		floor_mat.normal_enabled = true
+		floor_mat.normal_texture = dirt_normal
+		floor_mat.normal_scale = 0.9
+		floor_mat.uv1_scale = Vector3(9.0, 9.0, 9.0)
+		floor_node.set_surface_override_material(0, floor_mat)
+
+	# Warm point-lights around the ring — local pools of firelight near the lanterns.
+	var lantern_count: int = 8
+	for i: int in lantern_count:
+		var ang: float = TAU * float(i) / float(lantern_count)
+		var om: OmniLight3D = OmniLight3D.new()
+		om.name = "LanternLight%d" % i
+		om.light_color = Color(1.0, 0.62, 0.28)
+		om.light_energy = 2.2
+		om.omni_range = 3.2
+		om.omni_attenuation = 1.5
+		om.shadow_enabled = false
+		om.position = Vector3(cos(ang) * 4.25, 0.85, sin(ang) * 4.25)
+		add_child(om)
+
+	# The Rim torus is a rope boundary, not a neon light — drop the emissive glow.
+	var rim: MeshInstance3D = get_node_or_null("Rim") as MeshInstance3D
+	if rim != null:
+		var rim_mat: StandardMaterial3D = StandardMaterial3D.new()
+		rim_mat.albedo_color = Color(0.34, 0.22, 0.12)
+		rim_mat.roughness = 0.8
+		rim.set_surface_override_material(0, rim_mat)
+
+	# Swap the flat palm cutouts for detailed palm models at the same spots.
+	for pp: String in ["Environment3D/EnvPalms", "Environment3D/EnvPalms2"]:
+		var pn: Node3D = get_node_or_null(pp) as Node3D
+		if pn != null: pn.visible = false
+	var palm_scene: PackedScene = load("res://assets/gasing_palm.glb")
+	if palm_scene != null:
+		# [Godot pos (Blender base x,-y), target height, yaw] — heights/positions from the original EnvPalms clusters.
+		var palm_spots: Array = [
+			[Vector3(6.51, 0.0, -5.40), 3.62, 0.4],
+			[Vector3(2.85, 0.0, -10.54), 3.24, 1.7],
+			[Vector3(-3.08, 0.0, -8.51), 3.81, 2.9],
+			[Vector3(-7.36, 0.0, -4.27), 3.14, 4.1],
+			[Vector3(-9.52, 0.0, 4.31), 3.42, 5.2],
+			[Vector3(7.28, 0.0, 6.17), 3.24, 0.9],
+		]
+		for spot: Array in palm_spots:
+			var palm: Node3D = palm_scene.instantiate() as Node3D
+			add_child(palm)
+			palm.position = spot[0]
+			var s: float = float(spot[1]) / 3.4 # authored palm height
+			palm.scale = Vector3(s, s, s)
+			palm.rotation.y = float(spot[2])
+
+
+func _make_noise_normal(freq: float, strength: float) -> NoiseTexture2D:
+	var n: FastNoiseLite = FastNoiseLite.new()
+	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	n.frequency = freq
+	var tex: NoiseTexture2D = NoiseTexture2D.new()
+	tex.noise = n
+	tex.seamless = true
+	tex.as_normal_map = true
+	tex.bump_strength = strength
+	return tex
 
 
 func _t(key: String) -> String:
@@ -1264,6 +1396,7 @@ func _apply_language() -> void:
 	invite_button.text = _t("invite_friend")
 	wait_cancel_button.text = _t("cancel")
 	over_menu_button.text = _t("back_menu")
+	craft_back_button.text = _t("back")
 	craft_sub.text = _t("first_to_3")
 	for id: String in shape_cards:
 		var card: Dictionary = shape_cards[id]
@@ -1859,8 +1992,15 @@ func _build_craft_panel() -> void:
 	fight_button = _mk_button("", PLAYER_COLOR)
 	fight_button.add_theme_font_size_override("font_size", 22)
 	fight_button.pressed.connect(_on_fight_pressed)
+	craft_back_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	craft_back_button.pressed.connect(_on_over_menu_pressed) # SP: reset run -> title; MP: leave lobby -> title
+	var btn_row: HBoxContainer = HBoxContainer.new() # Back + FIGHT on one row so the tall panel doesn't overflow
+	btn_row.add_theme_constant_override("separation", 16)
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_row.add_child(craft_back_button)
+	btn_row.add_child(fight_button)
 	var fb_wrap: CenterContainer = CenterContainer.new()
-	fb_wrap.add_child(fight_button)
+	fb_wrap.add_child(btn_row)
 	v.add_child(fb_wrap)
 
 
