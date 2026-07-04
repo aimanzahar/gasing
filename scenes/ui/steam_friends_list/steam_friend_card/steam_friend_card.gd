@@ -1,8 +1,6 @@
 extends Control
 class_name SteamFriendCard
 
-const STEAM_FRIEND_CARD_SCENE := preload("uid://bk6f6a2dc0554")
-
 signal loaded
 
 @export var avatar_texture_rect: TextureRect
@@ -96,7 +94,8 @@ var item_scene: PackedScene:
 		return item_scene
 
 static func create_player_card(player_steam_id: int) -> SteamFriendCard:
-	var card := STEAM_FRIEND_CARD_SCENE.instantiate()
+	# ponytail: load() not preload() — preloading this scene's own uid re-enters the load and throws ERR_BUSY on threaded/MCP loads
+	var card := (load("uid://bk6f6a2dc0554") as PackedScene).instantiate()
 	card.read_friend_id(player_steam_id)
 	return card
 

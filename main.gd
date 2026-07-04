@@ -110,6 +110,9 @@ const STRINGS: Dictionary = {
 		"invite_friend": "INVITE FRIEND",
 		"invite_hint": "Or press Shift+Tab and invite from the Steam overlay.",
 		"steam_join_hint": "To join a friend, accept their Steam invite.",
+		"mp_code_label": "Lobby Code:",
+		"join_code": "JOIN CODE",
+		"share_code": "Share this code: %s",
 		"steam_offline": "Steam not detected — Steam play unavailable.",
 		"back": "BACK",
 		"cancel": "CANCEL",
@@ -204,6 +207,9 @@ const STRINGS: Dictionary = {
 		"invite_friend": "JEMPUT RAKAN",
 		"invite_hint": "Atau tekan Shift+Tab dan jemput dari overlay Steam.",
 		"steam_join_hint": "Untuk sertai rakan, terima jemputan Steam mereka.",
+		"mp_code_label": "Kod Lobi:",
+		"join_code": "SERTAI KOD",
+		"share_code": "Kongsi kod ini: %s",
 		"steam_offline": "Steam tidak dikesan — mod Steam tidak tersedia.",
 		"back": "KEMBALI",
 		"cancel": "BATAL",
@@ -331,6 +337,9 @@ var join_lan_button: Button = null
 var lan_ip_edit: LineEdit = null
 var lan_ip_label: Label = null
 var steam_join_hint_label: Label = null
+var join_code_edit: LineEdit = null
+var join_code_button: Button = null
+var mp_code_label: Label = null
 var steam_offline_label: Label = null
 var mp_back_button: Button = null
 var wait_title: Label = null
@@ -1243,6 +1252,8 @@ func _apply_language() -> void:
 	join_lan_button.text = _t("join_lan")
 	lan_ip_label.text = _t("lan_ip_label")
 	steam_join_hint_label.text = _t("steam_join_hint")
+	mp_code_label.text = _t("mp_code_label")
+	join_code_button.text = _t("join_code")
 	steam_offline_label.text = _t("steam_offline")
 	mp_back_button.text = _t("back")
 	invite_button.text = _t("invite_friend")
@@ -1532,6 +1543,18 @@ func _build_mp_panel() -> void:
 	v.add_child(hs_wrap)
 	steam_join_hint_label = _mk_label("", 12, Color(0.78, 0.7, 0.56))
 	v.add_child(steam_join_hint_label)
+	var code_row: HBoxContainer = HBoxContainer.new()
+	code_row.add_theme_constant_override("separation", 8)
+	code_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	mp_code_label = _mk_label("", 14)
+	code_row.add_child(mp_code_label)
+	join_code_edit = _mk_line_edit("ABC123")
+	join_code_edit.text_submitted.connect(func(_txt: String) -> void: _on_join_code_pressed())
+	code_row.add_child(join_code_edit)
+	join_code_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	join_code_button.pressed.connect(_on_join_code_pressed)
+	code_row.add_child(join_code_button)
+	v.add_child(code_row)
 	steam_offline_label = _mk_label("", 13, Color(1.0, 0.45, 0.3))
 	steam_offline_label.visible = false
 	v.add_child(steam_offline_label)
@@ -1642,6 +1665,8 @@ func _refresh_mp_panel() -> void:
 	host_steam_button.disabled = not steam_ok
 	host_steam_button.modulate = Color(1.0, 1.0, 1.0, 1.0) if steam_ok else Color(0.55, 0.55, 0.55, 1.0)
 	steam_offline_label.visible = not steam_ok
+	join_code_button.disabled = not steam_ok
+	join_code_edit.editable = steam_ok
 	host_lan_button.disabled = false
 	join_lan_button.disabled = false
 
@@ -1691,7 +1716,7 @@ func _on_host_steam_pressed() -> void:
 	var err: int = await Online.host_steam_lobby()
 	wait_cancel_button.disabled = false
 	if err == Online.ErrorCodes.SUCCESS:
-		_set_wait_status(_t("waiting_opponent"), _t("invite_hint"), true)
+		_set_wait_status(_t("waiting_opponent"), _t("share_code") % Online.lobby_code + "\n" + _t("invite_hint"), true)
 	else:
 		_show_menu_screen(MenuScreen.MP)
 		_show_menu_notice(_t("err_host_failed"))
@@ -1723,6 +1748,27 @@ func _on_join_lan_pressed() -> void:
 	# via player_connected (count 2) and failure via connection_failed.
 	_show_menu_screen(MenuScreen.WAIT)
 	_set_wait_status(_t("connecting"), "", false)
+
+
+func _on_join_code_pressed() -> void:
+	if not Online.steam_ready:
+		_show_menu_notice(_t("steam_offline"))
+		return
+	var code: String = join_code_edit.text.strip_edges()
+	if code.is_empty():
+		return
+	host_steam_button.disabled = true
+	host_lan_button.disabled = true
+	join_lan_button.disabled = true
+	join_code_button.disabled = true
+	_show_menu_screen(MenuScreen.WAIT)
+	_set_wait_status(_t("connecting"), "", false)
+	var err: int = await Online.find_lobby_by_code(code)
+	# SUCCESS is handled by joined_lobby -> _on_mp_joined_lobby (WAIT) then player_connected;
+	# only the failure path needs handling here.
+	if err != Online.ErrorCodes.SUCCESS:
+		_show_menu_screen(MenuScreen.MP)
+		_show_menu_notice(_t("err_join_steam"))
 
 
 func _on_mp_cancel_pressed() -> void:

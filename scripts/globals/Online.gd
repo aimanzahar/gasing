@@ -12,12 +12,14 @@ signal lobby_join_response(error_code: ErrorCodes)
 signal player_connected(player_data: PlayerData)
 signal player_disconnected(player_data: PlayerData)
 signal server_disconnected
+signal lobby_match_list_received(lobbies: Array)
 
 var is_busy: bool = false
 var is_host: bool = false
 var is_joining: bool = false
 var steam_ready: bool = false
 var steam_lobby_id: int = 0
+var lobby_code: String = "" # short shareable code advertised as lobby data (host only)
 var players: Dictionary[int, PlayerData]: # Uses multiplayer ids as keys
 	get: players.sort(); return players
 
@@ -30,6 +32,7 @@ func players_to_data_dicts() -> Array[Dictionary]: # Returns an array with all t
 @onready var personal_player_data: PlayerData: get = _get_personal_player_data # Your PlayerData resource
 
 func _ready() -> void:
+	randomize() # so generated lobby codes differ across launches
 	_setup_steam_multiplayer()
 	_setup_local_multiplayer()
 
@@ -43,6 +46,7 @@ func leave_lobby() -> void:
 	if multiplayer.multiplayer_peer: multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = null
 	steam_lobby_id = 0
+	lobby_code = ""
 	player_disconnected.emit(personal_player_data)
 	players.clear()
 
@@ -75,6 +79,7 @@ func _on_connection_failed() -> void:
 	is_host = false
 	if steam_lobby_id != 0: Steam.leaveLobby(steam_lobby_id) # else we stay a ghost member of the 2-slot lobby
 	steam_lobby_id = 0
+	lobby_code = ""
 	multiplayer.multiplayer_peer = null
 	players.clear() # join_address registers self before the connection resolves
 	connection_failed.emit()
@@ -83,6 +88,7 @@ func _on_peer_disconnected(id: int) -> void: _handle_peer_disconnection(id)
 
 func _on_server_disconnected() -> void:
 	is_host = false
+	lobby_code = ""
 	players.clear()
 	multiplayer.multiplayer_peer = null
 	server_disconnected.emit()
@@ -142,7 +148,7 @@ func _setup_steam_multiplayer() -> void:
 	OS.set_environment("SteamAppID", str(STEAM_APP_ID))
 	OS.set_environment("SteamGameID", str(STEAM_APP_ID))
 	Steam.steamInit(STEAM_APP_ID, true) # GodotSteam 4.17: (app_id, embed_callbacks) — embedded callbacks required, run_callbacks() is never called manually
-	steam_ready = Steam.isSteamRunning() and Steam.loggedOn()
+	steam_ready = Steam.loggedOn() and Steam.getSteamID() != 0 # isSteamRunning() flakes false even while logged on; loggedOn + valid id is the reliable readiness signal
 	if not steam_ready:
 		push_warning("Steam unavailable — Steam multiplayer disabled (LAN and single player unaffected).")
 		return
@@ -151,11 +157,14 @@ func _setup_steam_multiplayer() -> void:
 	Steam.lobby_created.connect(_on_steam_lobby_created)
 	Steam.lobby_joined.connect(_on_steam_lobby_join_response)
 	Steam.join_requested.connect(_on_steam_join_requested)
+	Steam.lobby_match_list.connect(_on_lobby_match_list)
 
 func _on_steam_lobby_created(connection_response: int, lobby_id: int) -> void:
 	match connection_response:
-		Steam.RESULT_OK: 
+		Steam.RESULT_OK:
 			steam_lobby_id = lobby_id
+			lobby_code = _generate_lobby_code()
+			Steam.setLobbyData(lobby_id, "code", lobby_code) # owner-only; advertised for code search
 			Steam.setLobbyJoinable(lobby_id, true)
 			_register_player_data(personal_player_data.to_dict())
 			lobby_hosting_response.emit.call_deferred(ErrorCodes.SUCCESS)
@@ -171,7 +180,7 @@ func host_steam_lobby() -> ErrorCodes:
 	var error_response := ErrorCodes.NO_RESPONSE
 	match host_error:
 		Error.OK:
-			Steam.createLobby(Steam.LOBBY_TYPE_FRIENDS_ONLY, MAX_PLAYERS)
+			Steam.createLobby(Steam.LOBBY_TYPE_PUBLIC, MAX_PLAYERS) # PUBLIC so a code search (requestLobbyList) can find it
 			var hosting_response: ErrorCodes = await lobby_hosting_response
 			error_response = hosting_response
 			match hosting_response:
@@ -217,6 +226,30 @@ func _on_steam_lobby_join_response(lobby_id: int, _permissions: int, _locked: bo
 			new_steam_peer.close()
 			Steam.leaveLobby(steam_lobby_id)
 			lobby_join_response.emit(ErrorCodes.FAILED)
+
+const _CODE_ALPHABET := "ABCDEFGHJKMNPQRSTUVWXYZ23456789" # no 0/O/1/I/L for readability
+const _CODE_LENGTH := 6
+
+func _generate_lobby_code() -> String:
+	# ponytail: random 6-char code; collision odds negligible at 2-player scale.
+	# Add a lobby-list uniqueness re-roll only if it ever actually matters.
+	var code := ""
+	for _i in _CODE_LENGTH: code += _CODE_ALPHABET[randi() % _CODE_ALPHABET.length()]
+	return code
+
+func find_lobby_by_code(code: String) -> ErrorCodes:
+	if not steam_ready: return ErrorCodes.STEAM_CONNECTION_ERROR
+	if is_busy: return ErrorCodes.CURRENTLY_BUSY
+	code = code.strip_edges().to_upper()
+	if code.is_empty(): return ErrorCodes.FAILED
+	Steam.addRequestLobbyListStringFilter("code", code, Steam.LOBBY_COMPARISON_EQUAL)
+	Steam.addRequestLobbyListDistanceFilter(Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE)
+	Steam.requestLobbyList()
+	var lobbies: Array = await lobby_match_list_received # ponytail: one search at a time; fine for 1v1 menu
+	if lobbies.is_empty(): return ErrorCodes.FAILED
+	return await join_steam_lobby(lobbies[0]) # reuses existing join path (same-owner guard, peer setup, etc.)
+
+func _on_lobby_match_list(lobbies: Array) -> void: lobby_match_list_received.emit(lobbies)
 
 func _create_steam_peer() -> SteamMultiplayerPeer:
 	var new_peer: SteamMultiplayerPeer = SteamMultiplayerPeer.new()
