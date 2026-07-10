@@ -5,6 +5,11 @@ enum MenuScreen { TITLE, MP, WAIT }
 
 const GASING_SCENE: PackedScene = preload("res://gasing.tscn")
 const FONT_TITLE: FontFile = preload("res://common/fonts/Kurland.ttf")
+const TEX_PANEL: Texture2D = preload("res://assets/ui/panel_ukiran.png")
+const TEX_CARD: Texture2D = preload("res://assets/ui/panel_card.png")
+const TEX_BTN: Texture2D = preload("res://assets/ui/button_plaque.png")
+const TEX_SONGKET: Texture2D = preload("res://assets/ui/songket_band.png")
+const TEX_GUNUNGAN: Texture2D = preload("res://assets/ui/gunungan_gold.png")
 const CLASH_SOUNDS: Array[AudioStream] = [
 	preload("res://assets/audio/impactWood_heavy_000.ogg"),
 	preload("res://assets/audio/impactWood_heavy_001.ogg"),
@@ -28,6 +33,16 @@ const PLAYER_COLOR: Color = Color(1.0, 0.78, 0.25)
 const FOE_COLOR: Color = Color(0.2, 0.85, 0.8)
 const TEXT_COLOR: Color = Color(0.96, 0.9, 0.78)
 const PANEL_BG: Color = Color(0.11, 0.06, 0.035, 0.94)
+# ---- heritage UI tokens (ukiran wood + songket gold theme)
+const SONGKET_GOLD: Color = Color(1.0, 0.78, 0.25) # == PLAYER_COLOR; semantic alias for UI gold
+const WOOD_DARK: Color = Color(0.3, 0.2, 0.1) # dark plaque base (quit/back/lang/skip/material)
+const WOOD_AMBER: Color = Color(0.82, 0.6, 0.24) # amber plaque base (host/join/pick/buy/mp)
+const WOOD_EDGE: Color = Color(0.16, 0.09, 0.05) # deep carved-shadow brown
+const BORDER_BROWN: Color = Color(0.55, 0.38, 0.16, 0.8) # carved rim / line-edit border
+const CREAM_MUTED: Color = Color(0.75, 0.66, 0.52) # secondary text
+const PANDAN: Color = Color(0.55, 0.8, 0.45) # endless button green
+const COPPER: Color = Color(0.85, 0.55, 0.3) # locked-card price text
+const DANGER: Color = Color(1.0, 0.45, 0.3) # defeat / offline / match point
 
 # Fixed base stats per style; "shape" is the physics archetype (radius/role),
 # "mesh" the glb id. The 4 unlockable styles copy their AI owner's preset stats.
@@ -1239,7 +1254,7 @@ func _toast_elimination(top: Gasing, reason: String) -> void:
 		_play_sfx(SND_TOPPLE, -6.0, 0.15)
 	else:
 		_play_sfx(SND_TOPPLE, -2.0, 0.1)
-	_toast(template % top.display_name, Color(1.0, 0.45, 0.3), top.position, false)
+	_toast(template % top.display_name, DANGER, top.position, false)
 
 
 func _finish_duel(player_wins: bool) -> void:
@@ -1379,11 +1394,11 @@ func _finish_run(won: bool) -> void:
 	_reset_over_panel()
 	if endless_mode:
 		over_title.text = _t("over_lose")
-		over_title.add_theme_color_override("font_color", Color(1.0, 0.45, 0.3))
+		over_title.add_theme_color_override("font_color", DANGER)
 		over_stats.text = _t("endless_over") % duel_index + "\n" + _t("endless_best_line") % endless_best
 	else:
 		over_title.text = _t("over_win") if won else _t("over_lose")
-		over_title.add_theme_color_override("font_color", PLAYER_COLOR if won else Color(1.0, 0.45, 0.3))
+		over_title.add_theme_color_override("font_color", PLAYER_COLOR if won else DANGER)
 		over_stats.text = _t("duels_won") % [duel_index, MASTERS.size()]
 	_enter_state(State.OVER)
 
@@ -1849,6 +1864,17 @@ func _apply_language() -> void:
 	_refresh_craft()
 
 
+func _mk_title(text: String, font_size: int, color: Color = PLAYER_COLOR) -> Label:
+	# Kurland display font with a carved-wood outline — panel headers
+	var l: Label = _mk_label(text, font_size, color)
+	l.add_theme_font_override("font", FONT_TITLE)
+	l.add_theme_color_override("font_outline_color", Color(0.25, 0.12, 0.02))
+	l.add_theme_constant_override("outline_size", 6)
+	l.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.6))
+	l.add_theme_constant_override("shadow_offset_y", 3)
+	return l
+
+
 func _mk_label(text: String, font_size: int, color: Color = TEXT_COLOR) -> Label:
 	var l: Label = Label.new()
 	l.text = text
@@ -1867,20 +1893,26 @@ func _mk_button(text: String, base: Color, light_text: bool = false) -> Button:
 	b.add_theme_color_override("font_color", txt_col)
 	b.add_theme_color_override("font_hover_color", txt_col)
 	b.add_theme_color_override("font_pressed_color", txt_col.darkened(0.2) if not light_text else txt_col)
-	var sb: StyleBoxFlat = StyleBoxFlat.new()
-	sb.bg_color = base
-	sb.set_corner_radius_all(8)
+	b.add_theme_color_override("font_disabled_color", Color(txt_col.r, txt_col.g, txt_col.b, 0.45))
+	# neutral-bright carved plaque texture x modulate = plaque in any wood tone
+	var sb: StyleBoxTexture = StyleBoxTexture.new()
+	sb.texture = TEX_BTN
+	sb.set_texture_margin_all(20.0)
 	sb.content_margin_left = 14.0
 	sb.content_margin_right = 14.0
 	sb.content_margin_top = 8.0
 	sb.content_margin_bottom = 8.0
+	sb.modulate_color = base
 	b.add_theme_stylebox_override("normal", sb)
-	var sb_h: StyleBoxFlat = sb.duplicate()
-	sb_h.bg_color = base.lightened(0.18)
+	var sb_h: StyleBoxTexture = sb.duplicate()
+	sb_h.modulate_color = base.lightened(0.18)
 	b.add_theme_stylebox_override("hover", sb_h)
-	var sb_p: StyleBoxFlat = sb.duplicate()
-	sb_p.bg_color = base.darkened(0.28)
+	var sb_p: StyleBoxTexture = sb.duplicate()
+	sb_p.modulate_color = base.darkened(0.28)
 	b.add_theme_stylebox_override("pressed", sb_p)
+	var sb_d: StyleBoxTexture = sb.duplicate()
+	sb_d.modulate_color = base.darkened(0.45)
+	b.add_theme_stylebox_override("disabled", sb_d)
 	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	b.pressed.connect(_on_any_button_pressed)
 	return b
@@ -1890,22 +1922,51 @@ func _on_any_button_pressed() -> void:
 	_play_sfx(SND_CLICK, -6.0, 0.05)
 
 
-func _mk_panel_box() -> PanelContainer:
+func _mk_panel_box(compact: bool = false, pad: float = 0.0) -> PanelContainer:
+	# carved ukiran frame; compact = slim double-groove variant (craft cards, small boxes);
+	# pad = extra breathing room for text-heavy boxes
 	var p: PanelContainer = PanelContainer.new()
-	var sb: StyleBoxFlat = StyleBoxFlat.new()
-	sb.bg_color = PANEL_BG
-	sb.set_corner_radius_all(14)
-	sb.content_margin_left = 26.0
-	sb.content_margin_right = 26.0
-	sb.content_margin_top = 20.0
-	sb.content_margin_bottom = 20.0
-	sb.border_width_bottom = 2
-	sb.border_width_top = 2
-	sb.border_width_left = 2
-	sb.border_width_right = 2
-	sb.border_color = Color(0.55, 0.38, 0.16, 0.8)
+	var sb: StyleBoxTexture = StyleBoxTexture.new()
+	sb.texture = TEX_CARD if compact else TEX_PANEL
+	sb.set_texture_margin_all(16.0 if compact else 48.0)
+	if not compact:
+		# tile the scroll border instead of stretching it (motifs must not distort);
+		# the slim card frame is straight lines, so default STRETCH is seamless for it
+		sb.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
+		sb.axis_stretch_vertical = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
+	var m: float = (14.0 if compact else 52.0) + pad # content must fully clear the border art
+	sb.content_margin_left = m
+	sb.content_margin_right = m
+	sb.content_margin_top = (12.0 if compact else 50.0) + pad
+	sb.content_margin_bottom = (12.0 if compact else 50.0) + pad
 	p.add_theme_stylebox_override("panel", sb)
 	return p
+
+
+func _mk_gunungan(h: float) -> TextureRect:
+	# gold wayang gunungan ornament above panel titles
+	var t: TextureRect = TextureRect.new()
+	t.texture = TEX_GUNUNGAN
+	t.custom_minimum_size = Vector2(h, h)
+	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	t.modulate = Color(1.0, 0.78, 0.25, 0.85)
+	t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return t
+
+
+func _mk_divider() -> Control:
+	# songket band separator
+	var d: HSeparator = HSeparator.new()
+	var sb: StyleBoxTexture = StyleBoxTexture.new()
+	sb.texture = TEX_SONGKET
+	sb.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE
+	sb.modulate_color = Color(SONGKET_GOLD, 0.85)
+	sb.content_margin_top = 4.0
+	sb.content_margin_bottom = 4.0
+	d.add_theme_stylebox_override("separator", sb)
+	d.add_theme_constant_override("separation", 8)
+	return d
 
 
 func _mk_fullrect_center() -> CenterContainer:
@@ -1931,14 +1992,17 @@ func _mk_stat_row(parent: Container, fill_color: Color, layered: bool = false) -
 	bar.custom_minimum_size = Vector2(100.0, 14.0)
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var bg: StyleBoxFlat = StyleBoxFlat.new()
-	bg.bg_color = Color(0.0, 0.0, 0.0, 0.5)
+	bg.bg_color = Color(0.05, 0.025, 0.01, 0.75) # recessed carved groove
 	bg.set_corner_radius_all(4)
+	bg.border_width_bottom = 1
+	bg.border_color = Color(0.55, 0.38, 0.16, 0.35) # light catching the groove's lower lip
 	bar.add_theme_stylebox_override("background", bg)
-	var fill: StyleBoxFlat = StyleBoxFlat.new()
 	# layered: bottom bar shows the forged total in a brighter tint; the overlay
 	# draws the base on top, so the bright sliver past it reads as forged bonus
-	fill.bg_color = fill_color.lightened(0.5) if layered else fill_color
-	fill.set_corner_radius_all(4)
+	var fill: StyleBoxTexture = StyleBoxTexture.new()
+	fill.texture = TEX_SONGKET
+	fill.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE # weave repeats, never stretches
+	fill.modulate_color = fill_color.lightened(0.5) if layered else fill_color
 	bar.add_theme_stylebox_override("fill", fill)
 	var over: ProgressBar = null
 	if layered:
@@ -1948,9 +2012,10 @@ func _mk_stat_row(parent: Container, fill_color: Color, layered: bool = false) -
 		over.set_anchors_preset(Control.PRESET_FULL_RECT)
 		over.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		over.add_theme_stylebox_override("background", StyleBoxEmpty.new())
-		var ofill: StyleBoxFlat = StyleBoxFlat.new()
-		ofill.bg_color = fill_color
-		ofill.set_corner_radius_all(4)
+		var ofill: StyleBoxTexture = StyleBoxTexture.new()
+		ofill.texture = TEX_SONGKET
+		ofill.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE
+		ofill.modulate_color = fill_color
 		over.add_theme_stylebox_override("fill", ofill)
 		bar.add_child(over)
 	row.add_child(bar)
@@ -2028,7 +2093,7 @@ func _build_ui() -> void:
 	wind_meter = WindMeter.new()
 	wind_meter.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	wind_meter.offset_left = 46.0
-	wind_meter.offset_right = 102.0
+	wind_meter.offset_right = 110.0 # widened for the coil bulge
 	wind_meter.offset_top = -320.0
 	wind_meter.offset_bottom = -50.0
 	wind_meter.visible = false
@@ -2053,7 +2118,7 @@ func _build_ui() -> void:
 	battle_hint.visible = false
 	hud.add_child(battle_hint)
 
-	menu_notice = _mk_label("", 15, Color(1.0, 0.45, 0.3))
+	menu_notice = _mk_label("", 15, DANGER)
 	menu_notice.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	menu_notice.offset_left = -420.0
 	menu_notice.offset_right = 420.0
@@ -2076,16 +2141,14 @@ func _build_ready_panel() -> void:
 	var v: VBoxContainer = VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
 	ready_panel.add_child(v)
-	ready_title = _mk_label("GASING PANGKAH", 64, PLAYER_COLOR)
-	ready_title.add_theme_font_override("font", FONT_TITLE)
-	ready_title.add_theme_color_override("font_outline_color", Color(0.25, 0.12, 0.02))
-	ready_title.add_theme_constant_override("outline_size", 10)
-	ready_title.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.6))
+	v.add_child(_mk_gunungan(44.0))
+	ready_title = _mk_title("GASING PANGKAH", 64)
+	ready_title.add_theme_constant_override("outline_size", 10) # bigger outline on the hero title
 	ready_title.add_theme_constant_override("shadow_offset_y", 4)
 	v.add_child(ready_title)
 	ready_heritage = _mk_label("", 19)
 	v.add_child(ready_heritage)
-	ready_fact = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	ready_fact = _mk_label("", 14, CREAM_MUTED)
 	v.add_child(ready_fact)
 	var menu_col: VBoxContainer = VBoxContainer.new()
 	menu_col.add_theme_constant_override("separation", 10)
@@ -2094,15 +2157,15 @@ func _build_ready_panel() -> void:
 	sp_button.add_theme_font_size_override("font_size", 20)
 	sp_button.pressed.connect(_on_single_player_pressed)
 	menu_col.add_child(sp_button)
-	endless_button = _mk_button("", Color(0.55, 0.8, 0.45))
+	endless_button = _mk_button("", PANDAN)
 	endless_button.add_theme_font_size_override("font_size", 20)
 	endless_button.pressed.connect(_on_endless_pressed)
 	menu_col.add_child(endless_button)
-	mp_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	mp_button = _mk_button("", WOOD_AMBER)
 	mp_button.add_theme_font_size_override("font_size", 20)
 	mp_button.pressed.connect(_on_multiplayer_pressed)
 	menu_col.add_child(mp_button)
-	quit_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	quit_button = _mk_button("", WOOD_DARK, true)
 	quit_button.pressed.connect(_on_quit_pressed)
 	menu_col.add_child(quit_button)
 	var menu_wrap: CenterContainer = CenterContainer.new()
@@ -2116,7 +2179,7 @@ func _build_ready_panel() -> void:
 	v.add_child(lang_row)
 	for entry: Array in [["en", "ENGLISH"], ["ms", "BAHASA MELAYU"]]:
 		var code: String = entry[0]
-		var b: Button = _mk_button(entry[1], Color(0.3, 0.2, 0.1), true)
+		var b: Button = _mk_button(entry[1], WOOD_DARK, true)
 		b.pressed.connect(_on_lang_pressed.bind(code))
 		lang_row.add_child(b)
 		lang_buttons[code] = b
@@ -2132,11 +2195,12 @@ func _build_mp_panel() -> void:
 	var v: VBoxContainer = VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)
 	box.add_child(v)
-	mp_title = _mk_label("", 30, PLAYER_COLOR)
+	v.add_child(_mk_gunungan(32.0))
+	mp_title = _mk_title("", 26)
 	v.add_child(mp_title)
-	mp_steam_header_label = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	mp_steam_header_label = _mk_label("", 14, CREAM_MUTED)
 	v.add_child(mp_steam_header_label)
-	host_steam_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	host_steam_button = _mk_button("", WOOD_AMBER)
 	host_steam_button.pressed.connect(_on_host_steam_pressed)
 	var hs_wrap: CenterContainer = CenterContainer.new()
 	hs_wrap.add_child(host_steam_button)
@@ -2151,17 +2215,17 @@ func _build_mp_panel() -> void:
 	join_code_edit = _mk_line_edit("ABC123")
 	join_code_edit.text_submitted.connect(func(_txt: String) -> void: _on_join_code_pressed())
 	code_row.add_child(join_code_edit)
-	join_code_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	join_code_button = _mk_button("", WOOD_AMBER)
 	join_code_button.pressed.connect(_on_join_code_pressed)
 	code_row.add_child(join_code_button)
 	v.add_child(code_row)
-	steam_offline_label = _mk_label("", 13, Color(1.0, 0.45, 0.3))
+	steam_offline_label = _mk_label("", 13, DANGER)
 	steam_offline_label.visible = false
 	v.add_child(steam_offline_label)
-	v.add_child(HSeparator.new())
-	mp_lan_header_label = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	v.add_child(_mk_divider())
+	mp_lan_header_label = _mk_label("", 14, CREAM_MUTED)
 	v.add_child(mp_lan_header_label)
-	host_lan_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	host_lan_button = _mk_button("", WOOD_AMBER)
 	host_lan_button.pressed.connect(_on_host_lan_pressed)
 	var hl_wrap: CenterContainer = CenterContainer.new()
 	hl_wrap.add_child(host_lan_button)
@@ -2175,11 +2239,11 @@ func _build_mp_panel() -> void:
 	lan_ip_edit.text = "127.0.0.1"
 	lan_ip_edit.text_submitted.connect(func(_txt: String) -> void: _on_join_lan_pressed())
 	join_row.add_child(lan_ip_edit)
-	join_lan_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	join_lan_button = _mk_button("", WOOD_AMBER)
 	join_lan_button.pressed.connect(_on_join_lan_pressed)
 	join_row.add_child(join_lan_button)
 	v.add_child(join_row)
-	mp_back_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	mp_back_button = _mk_button("", WOOD_DARK, true)
 	mp_back_button.pressed.connect(_on_mp_back_pressed)
 	var back_wrap: CenterContainer = CenterContainer.new()
 	back_wrap.add_child(mp_back_button)
@@ -2188,22 +2252,22 @@ func _build_mp_panel() -> void:
 
 func _build_wait_panel() -> void:
 	wait_panel = _mk_fullrect_center()
-	var box: PanelContainer = _mk_panel_box()
+	var box: PanelContainer = _mk_panel_box(true) # short panel: slim frame, no tall art to squash
 	wait_panel.add_child(box)
 	var v: VBoxContainer = VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
 	box.add_child(v)
-	wait_title = _mk_label("", 30, PLAYER_COLOR)
+	wait_title = _mk_title("", 26)
 	v.add_child(wait_title)
 	wait_info = _mk_label("", 15)
 	v.add_child(wait_info)
-	invite_button = _mk_button("", Color(0.82, 0.6, 0.24))
+	invite_button = _mk_button("", WOOD_AMBER)
 	invite_button.visible = false
 	invite_button.pressed.connect(_on_invite_friend_pressed)
 	var iv_wrap: CenterContainer = CenterContainer.new()
 	iv_wrap.add_child(invite_button)
 	v.add_child(iv_wrap)
-	wait_cancel_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	wait_cancel_button = _mk_button("", WOOD_DARK, true)
 	wait_cancel_button.pressed.connect(_on_mp_cancel_pressed)
 	var cc_wrap: CenterContainer = CenterContainer.new()
 	cc_wrap.add_child(wait_cancel_button)
@@ -2220,21 +2284,17 @@ func _mk_line_edit(placeholder: String) -> LineEdit:
 	e.add_theme_font_size_override("font_size", 16)
 	e.add_theme_color_override("font_color", TEXT_COLOR)
 	e.add_theme_color_override("caret_color", PLAYER_COLOR)
-	var sb: StyleBoxFlat = StyleBoxFlat.new()
-	sb.bg_color = Color(0.0, 0.0, 0.0, 0.5)
-	sb.set_corner_radius_all(8)
-	sb.border_width_bottom = 2
-	sb.border_width_top = 2
-	sb.border_width_left = 2
-	sb.border_width_right = 2
-	sb.border_color = Color(0.55, 0.38, 0.16, 0.8)
+	# carved slot: slim card frame; focus = warm >1 modulate reads as a gold glow on the rim
+	var sb: StyleBoxTexture = StyleBoxTexture.new()
+	sb.texture = TEX_CARD
+	sb.set_texture_margin_all(16.0) # LineEdit is ~34px tall; larger margins would crush the 9-patch
 	sb.content_margin_left = 10.0
 	sb.content_margin_right = 10.0
 	sb.content_margin_top = 6.0
 	sb.content_margin_bottom = 6.0
 	e.add_theme_stylebox_override("normal", sb)
-	var sb_f: StyleBoxFlat = sb.duplicate()
-	sb_f.border_color = PLAYER_COLOR
+	var sb_f: StyleBoxTexture = sb.duplicate()
+	sb_f.modulate_color = Color(1.35, 1.2, 0.85)
 	e.add_theme_stylebox_override("focus", sb_f)
 	return e
 
@@ -2391,11 +2451,11 @@ func _build_craft_panel() -> void:
 	var v: VBoxContainer = VBoxContainer.new()
 	v.add_theme_constant_override("separation", 7) # panel must fit the 720px viewport incl. Back/FIGHT
 	box.add_child(v)
-	craft_title = _mk_label("", 28, PLAYER_COLOR)
+	craft_title = _mk_title("", 24)
 	v.add_child(craft_title)
 	craft_duel_label = _mk_label("", 16)
 	v.add_child(craft_duel_label)
-	craft_sub = _mk_label("", 13, Color(0.75, 0.66, 0.52))
+	craft_sub = _mk_label("", 13, CREAM_MUTED)
 	craft_sub.visible = false
 	v.add_child(craft_sub)
 
@@ -2404,7 +2464,7 @@ func _build_craft_panel() -> void:
 	cards.add_theme_constant_override("h_separation", 10)
 	cards.add_theme_constant_override("v_separation", 10)
 	var cards_scroll: ScrollContainer = ScrollContainer.new()
-	cards_scroll.custom_minimum_size = Vector2(860.0, 272.0)
+	cards_scroll.custom_minimum_size = Vector2(860.0, 228.0)
 	cards_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	var cards_wrap: CenterContainer = CenterContainer.new()
 	cards_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2415,17 +2475,12 @@ func _build_craft_panel() -> void:
 	v.add_child(stat_legend_label)
 	for id: String in STYLE_DEFS:
 		var def: Dictionary = STYLE_DEFS[id]
-		var card: PanelContainer = _mk_panel_box()
-		var csb: StyleBoxFlat = card.get_theme_stylebox("panel") as StyleBoxFlat
-		csb.content_margin_left = 12.0
-		csb.content_margin_right = 12.0
-		csb.content_margin_top = 10.0
-		csb.content_margin_bottom = 10.0
+		var card: PanelContainer = _mk_panel_box(true)
 		cards.add_child(card)
 		var cv: VBoxContainer = VBoxContainer.new()
 		cv.add_theme_constant_override("separation", 5)
 		card.add_child(cv)
-		var pick: Button = _mk_button(def.label, Color(0.82, 0.6, 0.24))
+		var pick: Button = _mk_button(def.label, WOOD_AMBER)
 		pick.pressed.connect(_on_shape_selected.bind(id))
 		cv.add_child(pick)
 		var role: Label = _mk_label("", 12, Color(0.78, 0.7, 0.56))
@@ -2456,14 +2511,14 @@ func _build_craft_panel() -> void:
 		var mat_col: VBoxContainer = VBoxContainer.new()
 		mat_col.add_theme_constant_override("separation", 4)
 		mats_row.add_child(mat_col)
-		var mb: Button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+		var mb: Button = _mk_button("", WOOD_DARK, true)
 		mb.icon = load("res://assets/icon_%s.png" % mat_id)
 		mb.add_theme_constant_override("icon_max_width", 38)
 		mb.add_theme_constant_override("h_separation", 8)
 		mb.pressed.connect(_on_material_pressed.bind(mat_id))
 		mat_col.add_child(mb)
 		material_buttons[mat_id] = mb
-		var buy: Button = _mk_button("", Color(0.82, 0.6, 0.24), true)
+		var buy: Button = _mk_button("", WOOD_AMBER, true)
 		buy.add_theme_font_size_override("font_size", 12)
 		buy.pressed.connect(_on_material_bought.bind(mat_id))
 		mat_col.add_child(buy)
@@ -2496,7 +2551,7 @@ func _build_craft_panel() -> void:
 	fight_button = _mk_button("", PLAYER_COLOR)
 	fight_button.add_theme_font_size_override("font_size", 22)
 	fight_button.pressed.connect(_on_fight_pressed)
-	craft_back_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	craft_back_button = _mk_button("", WOOD_DARK, true)
 	craft_back_button.pressed.connect(_on_over_menu_pressed) # SP: reset run -> title; MP: leave lobby -> title
 	var btn_row: HBoxContainer = HBoxContainer.new() # Back + FIGHT on one row so the tall panel doesn't overflow
 	btn_row.add_theme_constant_override("separation", 16)
@@ -2553,11 +2608,11 @@ func _build_cutscene_panel() -> void:
 	cut_puppet.modulate = Color(0.10, 0.05, 0.03) # silhouette against the lamp
 	cutscene_panel.add_child(cut_puppet)
 
-	var text_box: PanelContainer = _mk_panel_box()
+	var text_box: PanelContainer = _mk_panel_box(true, 8.0) # wide + short: slim frame
 	text_box.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	text_box.offset_left = 70.0
 	text_box.offset_right = -70.0
-	text_box.offset_top = -190.0
+	text_box.offset_top = -216.0
 	text_box.offset_bottom = -24.0
 	text_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	cutscene_panel.add_child(text_box)
@@ -2578,7 +2633,7 @@ func _build_cutscene_panel() -> void:
 	cut_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	tv.add_child(cut_hint)
 
-	cut_skip_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	cut_skip_button = _mk_button("", WOOD_DARK, true)
 	cut_skip_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	cut_skip_button.offset_left = -130.0
 	cut_skip_button.offset_right = -40.0
@@ -2646,24 +2701,24 @@ func _cutscene_finish() -> void:
 
 func _build_round_panel() -> void:
 	round_panel = _mk_fullrect_center()
-	var box: PanelContainer = _mk_panel_box()
+	var box: PanelContainer = _mk_panel_box(true, 12.0) # short panel: slim frame, roomy
 	round_panel.add_child(box)
 	var v: VBoxContainer = VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 	box.add_child(v)
-	round_label = _mk_label("", 34, PLAYER_COLOR)
+	round_label = _mk_title("", 30)
 	v.add_child(round_label)
 	round_award_row = HBoxContainer.new()
 	round_award_row.add_theme_constant_override("separation", 14)
 	round_award_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	v.add_child(round_award_row)
-	mats_saved_label = _mk_label("", 13, Color(0.75, 0.66, 0.52))
+	mats_saved_label = _mk_label("", 13, CREAM_MUTED)
 	mats_saved_label.visible = false
 	v.add_child(mats_saved_label)
 	unlock_label = _mk_label("", 20, PLAYER_COLOR)
 	unlock_label.visible = false
 	v.add_child(unlock_label)
-	match_point_label = _mk_label("", 20, Color(1.0, 0.45, 0.3))
+	match_point_label = _mk_label("", 20, DANGER)
 	match_point_label.visible = false
 	v.add_child(match_point_label)
 	award_label = _mk_label("", 18)
@@ -2672,16 +2727,17 @@ func _build_round_panel() -> void:
 
 func _build_over_panel() -> void:
 	over_panel = _mk_fullrect_center()
-	var box: PanelContainer = _mk_panel_box()
+	var box: PanelContainer = _mk_panel_box(true, 12.0) # mid-height panel: slim frame, roomy
 	over_panel.add_child(box)
 	var v: VBoxContainer = VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
 	box.add_child(v)
-	over_title = _mk_label("", 40, PLAYER_COLOR)
+	v.add_child(_mk_gunungan(32.0))
+	over_title = _mk_title("", 34)
 	over_stats = _mk_label("", 18)
 	v.add_child(over_title)
 	v.add_child(over_stats)
-	over_mats_title = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	over_mats_title = _mk_label("", 14, CREAM_MUTED)
 	over_mats_title.visible = false
 	v.add_child(over_mats_title)
 	over_award_row = HBoxContainer.new()
@@ -2699,15 +2755,15 @@ func _build_over_panel() -> void:
 	var rb_wrap: CenterContainer = CenterContainer.new()
 	rb_wrap.add_child(restart_button)
 	v.add_child(rb_wrap)
-	over_menu_button = _mk_button("", Color(0.3, 0.2, 0.1), true)
+	over_menu_button = _mk_button("", WOOD_DARK, true)
 	over_menu_button.pressed.connect(_on_over_menu_pressed)
 	var om_wrap: CenterContainer = CenterContainer.new()
 	om_wrap.add_child(over_menu_button)
 	v.add_child(om_wrap)
-	rematch_status = _mk_label("", 14, Color(0.75, 0.66, 0.52))
+	rematch_status = _mk_label("", 14, CREAM_MUTED)
 	rematch_status.visible = false
 	v.add_child(rematch_status)
-	over_hint = _mk_label("", 13, Color(0.75, 0.66, 0.52))
+	over_hint = _mk_label("", 13, CREAM_MUTED)
 	v.add_child(over_hint)
 
 
@@ -2753,7 +2809,7 @@ func _refresh_craft() -> void:
 			else:
 				role.text = _t("price_tag") % int(STYLE_DEFS[id].get("price", 0))
 				pick.text = _t("buy_prefix") + String(STYLE_DEFS[id].label)
-			role.add_theme_color_override("font_color", Color(0.85, 0.55, 0.3))
+			role.add_theme_color_override("font_color", COPPER)
 			pick.disabled = net_active # locked cards double as buy buttons in SP
 		else:
 			role.text = _t("role_" + id)
@@ -2994,7 +3050,7 @@ func _net_finish_match() -> void:
 	_play_sfx(SND_WIN if i_won else SND_LOSE, 0.0, 0.0)
 	_reset_over_panel()
 	over_title.text = _t("match_win") if i_won else _t("match_lose") % net_opp_name
-	over_title.add_theme_color_override("font_color", PLAYER_COLOR if i_won else Color(1.0, 0.45, 0.3))
+	over_title.add_theme_color_override("font_color", PLAYER_COLOR if i_won else DANGER)
 	over_stats.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
 	if not net_match_mats.is_empty():
 		over_mats_title.text = _t("match_mats")
@@ -3150,7 +3206,7 @@ func _handle_mp_loss(msg: String) -> void:
 		Online.leave_lobby()
 		_reset_over_panel() # clears any rematch-wait state; banked rewards are already saved
 		over_title.text = _t("opp_left")
-		over_title.add_theme_color_override("font_color", Color(1.0, 0.45, 0.3))
+		over_title.add_theme_color_override("font_color", DANGER)
 		over_stats.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
 		restart_button.text = _t("back_menu")
 		_enter_state(State.OVER)
@@ -3171,14 +3227,19 @@ class ScorePips:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	func _draw() -> void:
-		# drawn circles, not "●○" text — default-font glyph coverage isn't guaranteed
+		# belah-ketupat diamonds (songket motif), filled vs hollow
 		for i: int in total:
 			var idx: int = total - 1 - i if rtl else i
-			var center: Vector2 = Vector2(11.0 + i * 22.0, 9.0)
+			var c: Vector2 = Vector2(11.0 + i * 22.0, 9.0)
+			var pts: PackedVector2Array = PackedVector2Array([
+				c + Vector2(0.0, -8.0), c + Vector2(7.0, 0.0), c + Vector2(0.0, 8.0), c + Vector2(-7.0, 0.0)])
 			if idx < wins:
-				draw_circle(center, 7.0, color)
+				draw_colored_polygon(pts, color)
+				draw_line(c + Vector2(0.0, -8.0), c + Vector2(0.0, 8.0), color.darkened(0.35), 1.0, true)
 			else:
-				draw_arc(center, 7.0, 0.0, TAU, 24, Color(1.0, 1.0, 1.0, 0.25), 2.0, true)
+				var outline: PackedVector2Array = pts.duplicate()
+				outline.append(pts[0])
+				draw_polyline(outline, Color(1.0, 1.0, 1.0, 0.25), 2.0, true)
 
 
 class SpinGauge:
@@ -3204,12 +3265,22 @@ class SpinGauge:
 	func _draw() -> void:
 		var c: Vector2 = Vector2(size.x / 2.0, size.x / 2.0)
 		var r: float = size.x / 2.0 - 10.0
-		draw_arc(c, r, 0.0, TAU, 40, Color(1.0, 1.0, 1.0, 0.12), 8.0, true)
+		# carved groove track with rims + gold compass notches (ukiran ring)
+		draw_arc(c, r, 0.0, TAU, 48, Color(0.16, 0.09, 0.05, 0.85), 10.0, true)
+		draw_arc(c, r + 5.5, 0.0, TAU, 48, Color(0.55, 0.38, 0.16, 0.55), 1.5, true)
+		draw_arc(c, r - 5.5, 0.0, TAU, 48, Color(0.55, 0.38, 0.16, 0.55), 1.5, true)
+		for i: int in 8:
+			var a: float = -PI / 2.0 + float(i) * TAU / 8.0
+			var dir: Vector2 = Vector2(cos(a), sin(a))
+			draw_line(c + dir * (r - 4.0), c + dir * (r + 4.0), Color(1.0, 0.78, 0.25, 0.45), 2.0, true)
 		var col: Color = ring_color
 		if wobbling:
 			col = ring_color.lerp(Color(1.0, 0.3, 0.2), 0.5 + 0.5 * sin(_flash))
 		if shown > 0.004:
-			draw_arc(c, r, -PI / 2.0, -PI / 2.0 + TAU * clampf(shown, 0.0, 1.0), 40, col, 8.0, true)
+			var a1: float = -PI / 2.0 + TAU * clampf(shown, 0.0, 1.0)
+			draw_arc(c, r, -PI / 2.0, a1, 48, col, 7.0, true)
+			draw_circle(c + Vector2(0.0, -r), 3.5, col)
+			draw_circle(c + Vector2(cos(a1), sin(a1)) * r, 3.5, col)
 		var f: Font = get_theme_default_font()
 		draw_string(f, Vector2(0.0, c.y + 7.0), str(int(round(shown * 100.0))), HORIZONTAL_ALIGNMENT_CENTER, size.x, 20, col)
 		draw_string(f, Vector2(0.0, size.x + 18.0), title, HORIZONTAL_ALIGNMENT_CENTER, size.x, 14, Color(0.96, 0.9, 0.78))
@@ -3217,13 +3288,24 @@ class SpinGauge:
 
 class WindMeter:
 	extends Control
+	# a cord winding around a gasing spindle: coils stack as you charge;
+	# the 80-95 sweet spot is a songket gold band, >95 is overwind
+
+	const ROPE: Color = Color(0.78, 0.62, 0.42)
+	const ROPE_DARK: Color = Color(0.35, 0.25, 0.15)
+	const WOOD: Color = Color(0.32, 0.20, 0.10)
+	const WOOD_EDGE_C: Color = Color(0.16, 0.09, 0.05)
+	const GOLD: Color = Color(1.0, 0.78, 0.25)
+	const CREAM: Color = Color(0.96, 0.9, 0.78)
+	const COIL_H: float = 7.0
+	const SONGKET_TEX: Texture2D = preload("res://assets/ui/songket_band.png")
 
 	var power: float = 0.0
 	var shown: float = 0.0
 	var label_text: String = "WIND"
 
 	func _ready() -> void:
-		custom_minimum_size = Vector2(56.0, 270.0)
+		custom_minimum_size = Vector2(64.0, 270.0)
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	func _process(delta: float) -> void:
@@ -3233,20 +3315,54 @@ class WindMeter:
 	func _y(v: float) -> float:
 		return size.y * (1.0 - v / 100.0)
 
+	func _hw(y: float) -> float:
+		return lerpf(7.0, 11.0, y / size.y) # shaft tapers top -> bottom
+
 	func _draw() -> void:
-		draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, 0.55), true)
-		draw_rect(Rect2(Vector2(0.0, _y(80.0)), Vector2(size.x, _y(40.0) - _y(80.0))), Color(0.9, 0.7, 0.2, 0.25), true)
-		draw_rect(Rect2(Vector2(0.0, _y(95.0)), Vector2(size.x, _y(80.0) - _y(95.0))), Color(0.2, 0.9, 0.3, 0.45), true)
-		draw_rect(Rect2(Vector2.ZERO, Vector2(size.x, _y(95.0))), Color(0.95, 0.2, 0.15, 0.45), true)
-		var col: Color = Color(0.55, 0.6, 0.75)
+		var cx: float = size.x * 0.5
+		# spindle shaft
+		var shaft: PackedVector2Array = PackedVector2Array([
+			Vector2(cx - _hw(0.0), 0.0), Vector2(cx + _hw(0.0), 0.0),
+			Vector2(cx + _hw(size.y), size.y), Vector2(cx - _hw(size.y), size.y)])
+		draw_colored_polygon(shaft, WOOD)
+		draw_line(shaft[0], shaft[3], WOOD_EDGE_C, 2.0, true)
+		draw_line(shaft[1], shaft[2], WOOD_EDGE_C, 2.0, true)
+		draw_line(Vector2(cx - 2.5, 3.0), Vector2(cx - 3.5, size.y - 3.0), WOOD.lightened(0.35), 2.5, true)
+		# zone semantics preserved: 40-80 amber wash, 80-95 songket sweet band, >95 overwind
+		draw_rect(Rect2(Vector2(6.0, _y(80.0)), Vector2(size.x - 12.0, _y(40.0) - _y(80.0))), Color(0.9, 0.7, 0.2, 0.16), true)
+		draw_texture_rect_region(SONGKET_TEX, Rect2(Vector2(2.0, _y(95.0)), Vector2(size.x - 4.0, _y(80.0) - _y(95.0))),
+			Rect2(0.0, 0.0, 64.0, 32.0), Color(GOLD, 0.9))
+		draw_rect(Rect2(Vector2(6.0, 0.0), Vector2(size.x - 12.0, _y(95.0))), Color(0.95, 0.2, 0.15, 0.30), true)
+		for v: float in [80.0, 95.0]:
+			var yv: float = _y(v)
+			draw_line(Vector2(0.0, yv), Vector2(9.0, yv), GOLD, 2.0, true)
+			draw_line(Vector2(size.x - 9.0, yv), Vector2(size.x, yv), GOLD, 2.0, true)
+		# tip color: same thresholds as the old bar (readability preserved)
+		var tip: Color = Color(0.55, 0.6, 0.75)
 		if shown > 95.0:
-			col = Color(1.0, 0.25, 0.2)
+			tip = Color(1.0, 0.25, 0.2)
 		elif shown >= 80.0:
-			col = Color(0.25, 0.95, 0.35)
+			tip = Color(0.25, 0.95, 0.35)
 		elif shown >= 40.0:
-			col = Color(0.95, 0.75, 0.25)
+			tip = Color(0.95, 0.75, 0.25)
+		# cord coils stack bottom -> _y(shown)
 		var fill_top: float = _y(shown)
-		draw_rect(Rect2(Vector2(4.0, fill_top), Vector2(size.x - 8.0, size.y - fill_top)), col, true)
-		draw_rect(Rect2(Vector2.ZERO, size), Color(0.96, 0.9, 0.78, 0.8), false, 2.0)
+		var n: int = int((size.y - fill_top) / COIL_H)
+		for i: int in n:
+			var yc: float = size.y - (float(i) + 0.5) * COIL_H
+			var half: float = _hw(yc) + 6.0
+			var body: Color = tip if i >= n - 2 else ROPE
+			var w: float = COIL_H - 1.0
+			draw_line(Vector2(cx - half, yc), Vector2(cx + half, yc), body, w, true)
+			draw_circle(Vector2(cx - half, yc), w * 0.5, body)
+			draw_circle(Vector2(cx + half, yc), w * 0.5, body)
+			draw_line(Vector2(cx - half, yc + w * 0.5), Vector2(cx + half, yc + w * 0.5), ROPE_DARK, 1.0, true)
+		if n > 0:
+			# loose cord end pulling away from the top coil
+			var yt: float = size.y - (float(n) - 0.5) * COIL_H
+			draw_line(Vector2(cx + _hw(yt) + 6.0, yt), Vector2(size.x + 16.0, yt - 22.0), tip, 3.0, true)
+		# label on a small wood plaque
 		var f: Font = get_theme_default_font()
-		draw_string(f, Vector2(0.0, -10.0), label_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 13, Color(0.96, 0.9, 0.78))
+		draw_rect(Rect2(Vector2(2.0, -26.0), Vector2(size.x - 4.0, 20.0)), Color(WOOD_EDGE_C, 0.85), true)
+		draw_rect(Rect2(Vector2(2.0, -26.0), Vector2(size.x - 4.0, 20.0)), Color(GOLD, 0.5), false, 1.0)
+		draw_string(f, Vector2(0.0, -11.0), label_text, HORIZONTAL_ALIGNMENT_CENTER, size.x, 13, CREAM)
