@@ -493,6 +493,8 @@ var aim_angle: float = 0.0
 var hit_cooldown: float = 0.0
 var nudge_cooldown: float = 0.0
 var ai_think_timer: float = 1.0
+var ai_tier: float = 0.0 # 0..1.3 difficulty scalar, cached per battle in _do_launch
+var ai_dodge_cd: float = 0.0 # reactive dodge cooldown — bounds the spin cost of dodging
 var _marker_tween: Tween = null
 var _sfx_pool: Array[AudioStreamPlayer] = []
 var _sfx_index: int = 0
@@ -539,10 +541,16 @@ var my_pips: ScorePips = null
 var opp_pips: ScorePips = null
 var fight_button: Button = null
 var restart_button: Button = null
-var shape_cards: Dictionary = {}
+var craft_index: int = 0 # roster position browsed in the fighter-select carousel (transient)
+var craft_prev_button: Button = null
+var craft_next_button: Button = null
+var craft_name_label: Label = null
+var craft_counter_label: Label = null
+var craft_status_label: Label = null
+var craft_stat_rows: Array = [] # 3 dicts from _mk_stat_row: mass, spin, balance
+var craft_forge_box: Control = null
 var material_buttons: Dictionary = {}
 var material_buy_buttons: Dictionary = {}
-var stat_legend_label: Label = null
 var accent_row: HBoxContainer = null
 var accent_label: Label = null
 var cutscene_panel: Control = null
@@ -847,7 +855,7 @@ func _enter_state(next: State) -> void:
 			_set_hud_visible(false)
 			net_ready_sent = false
 			net_opp_config = {}
-			fight_button.disabled = false
+			craft_index = maxi(0, STYLE_DEFS.keys().find(selected_shape))
 			craft_opp_status.text = ""
 			craft_info.text = _t("pick_info")
 			_refresh_craft()
@@ -905,6 +913,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			if menu_screen == MenuScreen.TITLE and event.is_action_pressed("ui_accept"):
 				get_viewport().set_input_as_handled()
 				_enter_state(State.CRAFT)
+		State.CRAFT:
+			if event.is_action_pressed("ui_left"):
+				get_viewport().set_input_as_handled()
+				_craft_cycle(-1)
+			elif event.is_action_pressed("ui_right"):
+				get_viewport().set_input_as_handled()
+				_craft_cycle(1)
 		State.CUTSCENE:
 			if event.is_action_pressed("ui_accept"):
 				get_viewport().set_input_as_handled()
@@ -967,20 +982,17 @@ func _update_workshop_preview() -> void:
 		return
 	# a real Gasing instance: wood + accent materials and idle spin for free,
 	# and accent swatches recolor it live
+	var viewed: String = _craft_viewed()
 	var g: Gasing = GASING_SCENE.instantiate() as Gasing
 	add_child(g)
-	g.setup("", String(STYLE_DEFS[selected_shape].shape), _style_battle_stats(selected_shape), _style_accent(selected_shape))
+	g.setup("", String(STYLE_DEFS[viewed].shape), _style_battle_stats(viewed), _style_accent(viewed))
 	workshop_preview = g
-	# park it on the arena floor in the strip right of the workshop panel;
-	# unprojecting survives the canvas_items/expand stretch at any aspect
-	var vp: Vector2 = get_viewport().get_visible_rect().size
-	var screen: Vector2 = Vector2(vp.x * 0.88, vp.y * 0.55)
-	var hit: Variant = Plane(Vector3.UP, 0.0).intersects_ray(camera.project_ray_origin(screen), camera.project_ray_normal(screen))
-	if hit != null:
-		workshop_preview.position = hit
+	# the camera's center ray hits the ground plane at the world origin, so the
+	# hero top spins dead-center screen in the gelanggang ring — no unprojection
+	workshop_preview.position = Vector3.ZERO
 	workshop_preview.scale = Vector3(0.01, 0.01, 0.01)
 	var tw: Tween = create_tween()
-	tw.tween_property(workshop_preview, "scale", Vector3(1.5, 1.5, 1.5), 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(workshop_preview, "scale", Vector3(2.6, 2.6, 2.6), 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _clear_preview() -> void:
@@ -1067,7 +1079,11 @@ func _do_launch() -> void:
 	foe_top = _spawn_top(false)
 	foe_gauge.ring_color = foe_top.accent_color
 	var opp: Dictionary = _current_opponent()
-	var foe_wind: float = clampf(_rng.randfn(opp.wind_mean, opp.wind_dev), 5.0, 100.0)
+	ai_tier = _ai_tier()
+	# floor rises with tier (masters stop fumbling); cap 95 — rolls past 95 hit the
+	# cord-snap penalty (eff 0.15), which made high-dev masters throw 1 in 5 launches
+	var wind_floor: float = 40.0 + 35.0 * minf(ai_tier, 1.0) # knob
+	var foe_wind: float = clampf(_rng.randfn(opp.wind_mean, opp.wind_dev), wind_floor, 95.0)
 	var foe_eff: float = _wind_effectiveness(foe_wind)
 	var foe_dir: Vector3 = Vector3.BACK.rotated(Vector3.UP, _rng.randf_range(-0.25, 0.25))
 	foe_top.launch(foe_dir, foe_eff)
@@ -1075,6 +1091,7 @@ func _do_launch() -> void:
 	hit_cooldown = 0.0
 	nudge_cooldown = 0.0
 	ai_think_timer = 1.2
+	ai_dodge_cd = 0.0
 	_enter_state(State.BATTLE)
 
 
@@ -1123,37 +1140,89 @@ func _flash_click_marker(point: Vector3) -> void:
 	_marker_tween.tween_callback(click_marker.hide)
 
 
+func _ai_tier() -> float:
+	# campaign: 0.1 (duel 1) .. 1.1 (duel 7); endless keeps climbing past the campaign cap
+	var t: float = clampf(0.2 + 0.12 * float(duel_index), 0.2, 1.3) if endless_mode \
+		else 0.1 + float(duel_index) / 6.0
+	if bool(_current_opponent().aggressive):
+		t += 0.15 # knob: aggressive masters fight a notch above their stage
+	return t
+
+
 func _ai_think(delta: float) -> void:
-	var opp: Dictionary = _current_opponent()
-	# continuous gentle drift (must beat the 0.8 friction decel or the AI never moves once parked)
-	var target: Vector3 = player_top.position if opp.aggressive else Vector3.ZERO
-	var to_target: Vector3 = target - foe_top.position
-	to_target.y = 0.0
-	if to_target.length() > 0.2:
-		var strength: float = 1.6 if opp.aggressive else 0.95
-		foe_top.velocity += to_target.normalized() * strength * delta
-	# decisive pushes on a think timer — the AI plays by the player's push rules
+	var skill: float = minf(ai_tier, 1.0) # aim/lead/power saturate; cadence keeps scaling via duel_index
+	var foe_flat: Vector2 = Vector2(foe_top.position.x, foe_top.position.z)
+	var foe_dist: float = foe_flat.length()
+	var out_dir: Vector3 = Vector3(foe_flat.x, 0.0, foe_flat.y) / maxf(foe_dist, 0.001)
+	var to_player: Vector3 = player_top.position - foe_top.position
+	to_player.y = 0.0
+	var sep: float = to_player.length()
+	# continuous drift (free): survive first, then hunt. Whiffed charges are the
+	# suicide vector (friction 0.8 can't stop a 4 m/s sail past RIM_CLIMB_SPEED 1.7),
+	# hence the speed cap and radial emergency brake.
+	if foe_dist > 2.7 and foe_top.velocity.dot(out_dir) > 1.2: # knob
+		foe_top.velocity += -out_dir * 2.6 * delta # emergency brake: never charge over the rim
+	elif foe_dist > 3.2:
+		foe_top.velocity += -out_dir * 1.8 * delta # recover footing
+	else:
+		var lead: Vector3 = player_top.position + player_top.velocity * (0.15 + 0.3 * skill) # knob
+		var lead_flat: Vector2 = Vector2(lead.x, lead.z)
+		if lead_flat.length() > 3.4:
+			lead_flat = lead_flat.normalized() * 3.4 # never chase a point in the rim band
+		var hunt: Vector3 = Vector3(lead_flat.x, 0.0, lead_flat.y) - foe_top.position
+		hunt.y = 0.0
+		if hunt.length() > 0.2 and foe_top.velocity.length() < 2.6: # knob speed cap
+			foe_top.velocity += hunt.normalized() * (1.3 + 1.5 * skill) * delta # knob
+	# reactive dodge (all tiers): sidestep an incoming charge the moment it's seen.
+	# Cooldown is consumed on detection whether the roll succeeds or not — a failed
+	# roll means the AI got caught flat, and a yo-yo-charging player can't bait
+	# dodges faster than the cooldown to drain the AI's spin.
+	ai_dodge_cd = maxf(ai_dodge_cd - delta, 0.0)
+	var charge_threat: bool = sep < 2.6 and player_top.velocity.length() > 1.6 \
+		and player_top.velocity.normalized().dot(-to_player / maxf(sep, 0.001)) > 0.6 # knob
+	if charge_threat and ai_dodge_cd <= 0.0 \
+			and foe_top.spin - NUDGE_SPIN_COST >= 0.10 * foe_top.launch_spin:
+		ai_dodge_cd = 1.5 - 0.9 * skill # knob: ready again in 0.6-1.5s
+		if _rng.randf() < 0.35 + 0.6 * skill: # knob: low tiers flinch late, high tiers read every charge
+			var perp: Vector3 = (to_player / maxf(sep, 0.001)).rotated(Vector3.UP, PI * 0.5)
+			var dodge: Vector3 = perp if perp.dot(-out_dir) >= 0.0 else -perp # lean inward, never rimward
+			foe_top.velocity += dodge * NUDGE_POWER * 1.15 # knob: enough to clear the combined radii
+			foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
+			foe_top.flash_direction(dodge)
+			ai_think_timer = minf(ai_think_timer, 0.25) # matador: counter-ram the exposed back
+	# paid pushes on the think timer — the AI plays by the player's push rules
 	ai_think_timer -= delta
 	if ai_think_timer > 0.0:
 		return
-	ai_think_timer = maxf(1.5 - 0.22 * float(duel_index), 0.5) + _rng.randf_range(-0.2, 0.3)
-	if foe_top.spin < NUDGE_SPIN_COST * 4.0:
-		return
+	ai_think_timer = maxf(1.3 - 0.12 * float(duel_index), 0.45) + _rng.randf_range(-0.15, 0.25) # knob
+	# spin budget relative to launch_spin: wobble starts at 0.25x, topple at 0.08x —
+	# an absolute floor could push the AI into topple range on weak launches
+	var spin_after: float = foe_top.spin - NUDGE_SPIN_COST
+	if spin_after < 0.10 * foe_top.launch_spin:
+		return # hard floor: a push may never topple us
+	var conserving: bool = spin_after < 0.30 * foe_top.launch_spin # knob
+	var kill_shot: bool = player_top.wobble > foe_top.wobble + 0.1 # winning the wobble race
+	var player_dist: float = Vector2(player_top.position.x, player_top.position.z).length()
 	var push_dir: Vector3 = Vector3.ZERO
-	var foe_dist: float = Vector2(foe_top.position.x, foe_top.position.z).length()
-	var to_player: Vector3 = player_top.position - foe_top.position
-	to_player.y = 0.0
+	var power: float = NUDGE_POWER
 	if foe_dist > 3.0:
-		push_dir = -foe_top.position
-	elif opp.aggressive or player_top.wobble > 0.0:
-		push_dir = (player_top.position + player_top.velocity * 0.3) - foe_top.position
-	elif not opp.aggressive and to_player.length() < 2.0:
-		push_dir = -to_player.rotated(Vector3.UP, _rng.randf_range(-0.6, 0.6))
+		push_dir = -out_dir # paid center recovery
+	elif player_dist > 2.8 and foe_dist < 2.3 and sep < 1.8 and (not conserving or kill_shot):
+		push_dir = to_player # RIM KILL: shove them over — plain power, tight gates make whiffs rare
+	elif sep < 2.6 and (not conserving or kill_shot) \
+			and (foe_top.mass >= player_top.mass * 0.9 or kill_shot
+				or player_top.velocity.length() < 1.4): # knob
+		# matador rule: an out-massed top loses even trades (mass ratio doubles the
+		# damage against it), so it only rams a slow/parked or wobbling target and
+		# otherwise saves spin — dodging the heavy top's charges bleeds the charger
+		push_dir = player_top.position + player_top.velocity * (0.15 + 0.3 * skill) - foe_top.position
+		power = NUDGE_POWER * (1.0 + 0.2 * skill) # knob: capped 1.2x — more only raises self-ringout risk
 	push_dir.y = 0.0
 	if push_dir.length() < 0.05:
-		return
-	push_dir = push_dir.normalized()
-	foe_top.velocity += push_dir * NUDGE_POWER
+		return # out of range: save the spin, keep drifting
+	# low tiers attack but miss — aim error shrinks to surgical as skill rises
+	push_dir = push_dir.normalized().rotated(Vector3.UP, _rng.randfn(0.0, 0.45 * (1.0 - skill))) # knob
+	foe_top.velocity += push_dir * power
 	foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
 	foe_top.flash_direction(push_dir)
 
@@ -1593,6 +1662,10 @@ func _on_over_menu_pressed() -> void:
 
 
 func _on_fight_pressed() -> void:
+	var viewed: String = _craft_viewed()
+	if not unlocked_styles.has(viewed):
+		_on_shape_selected(viewed) # FIGHT doubles as BUY: reuse the gate/buy/need-coins flow
+		return
 	if net_active:
 		if net_ready_sent:
 			return
@@ -1618,6 +1691,22 @@ func _on_fight_pressed() -> void:
 func _on_lang_pressed(code: String) -> void:
 	lang = code
 	_apply_language()
+
+
+func _craft_viewed() -> String:
+	return STYLE_DEFS.keys()[craft_index]
+
+
+func _craft_cycle(dir: int) -> void:
+	if net_active and net_ready_sent:
+		return # config already on the wire; a late switch would desync the peers
+	craft_index = wrapi(craft_index + dir, 0, STYLE_DEFS.size())
+	var id: String = _craft_viewed()
+	if unlocked_styles.has(id):
+		_on_shape_selected(id) # auto-select what you're looking at (sets, saves, refreshes, previews)
+	else:
+		_refresh_craft()
+		_update_workshop_preview()
 
 
 func _on_shape_selected(id: String) -> void:
@@ -1812,7 +1901,6 @@ func _apply_language() -> void:
 	player_gauge.title = _t("gauge_you")
 	foe_gauge.title = net_opp_name if net_active and not net_opp_name.is_empty() else _t("gauge_foe")
 	craft_title.text = _t("bench")
-	craft_mats_hint.text = _t("mats_hint")
 	craft_info.text = _t("pick_info")
 	fight_button.text = _t("fight")
 	restart_button.text = _t("restart")
@@ -1838,20 +1926,13 @@ func _apply_language() -> void:
 	over_menu_button.text = _t("back_menu")
 	craft_back_button.text = _t("back")
 	craft_sub.text = _t("first_to_3")
-	for id: String in shape_cards:
-		var card: Dictionary = shape_cards[id]
-		# role text is owned by _refresh_craft (locked hint vs role line)
-		var stat_labels: Array = card.stat_labels
-		var names: Array = ["stat_mass", "stat_spin", "stat_balance"]
-		var tips: Array = ["tip_stat_mass", "tip_stat_spin", "tip_stat_balance"]
-		var bars: Array = [card.mass, card.spin_reserve, card.balance]
-		for i: int in stat_labels.size():
-			var lbl: Label = stat_labels[i]
-			lbl.text = _t(names[i])
-			lbl.tooltip_text = _t(tips[i])
-			(bars[i] as ProgressBar).tooltip_text = _t(tips[i])
-	if stat_legend_label != null:
-		stat_legend_label.text = _t("stat_legend")
+	var names: Array = ["stat_mass", "stat_spin", "stat_balance"]
+	var tips: Array = ["tip_stat_mass", "tip_stat_spin", "tip_stat_balance"]
+	for i: int in craft_stat_rows.size():
+		var r: Dictionary = craft_stat_rows[i]
+		(r.label as Label).text = _t(names[i])
+		(r.label as Label).tooltip_text = _t(tips[i])
+		(r.bar as ProgressBar).tooltip_text = _t(tips[i])
 	for mat_id: String in material_buttons:
 		var mb: Button = material_buttons[mat_id]
 		mb.tooltip_text = _t("tip_" + mat_id)
@@ -1914,6 +1995,7 @@ func _mk_button(text: String, base: Color, light_text: bool = false) -> Button:
 	sb_d.modulate_color = base.darkened(0.45)
 	b.add_theme_stylebox_override("disabled", sb_d)
 	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.focus_mode = Control.FOCUS_NONE # arrows must reach _unhandled_input (carousel), not focus-nav
 	b.pressed.connect(_on_any_button_pressed)
 	return b
 
@@ -1928,17 +2010,20 @@ func _mk_panel_box(compact: bool = false, pad: float = 0.0) -> PanelContainer:
 	var p: PanelContainer = PanelContainer.new()
 	var sb: StyleBoxTexture = StyleBoxTexture.new()
 	sb.texture = TEX_CARD if compact else TEX_PANEL
-	sb.set_texture_margin_all(16.0 if compact else 48.0)
+	# card frame's gold line sits at texture px 15-16: slice at 18 so the whole
+	# line stays in the border patches (16 cut through it and bled gold into the
+	# stretched center)
+	sb.set_texture_margin_all(18.0 if compact else 48.0)
 	if not compact:
 		# tile the scroll border instead of stretching it (motifs must not distort);
 		# the slim card frame is straight lines, so default STRETCH is seamless for it
 		sb.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
 		sb.axis_stretch_vertical = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
-	var m: float = (14.0 if compact else 52.0) + pad # content must fully clear the border art
+	var m: float = (20.0 if compact else 52.0) + pad # content must fully clear the border art
 	sb.content_margin_left = m
 	sb.content_margin_right = m
-	sb.content_margin_top = (12.0 if compact else 50.0) + pad
-	sb.content_margin_bottom = (12.0 if compact else 50.0) + pad
+	sb.content_margin_top = (18.0 if compact else 50.0) + pad
+	sb.content_margin_bottom = (18.0 if compact else 50.0) + pad
 	p.add_theme_stylebox_override("panel", sb)
 	return p
 
@@ -2252,7 +2337,7 @@ func _build_mp_panel() -> void:
 
 func _build_wait_panel() -> void:
 	wait_panel = _mk_fullrect_center()
-	var box: PanelContainer = _mk_panel_box(true) # short panel: slim frame, no tall art to squash
+	var box: PanelContainer = _mk_panel_box(true, 6.0) # short panel: slim frame, no tall art to squash
 	wait_panel.add_child(box)
 	var v: VBoxContainer = VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
@@ -2284,17 +2369,20 @@ func _mk_line_edit(placeholder: String) -> LineEdit:
 	e.add_theme_font_size_override("font_size", 16)
 	e.add_theme_color_override("font_color", TEXT_COLOR)
 	e.add_theme_color_override("caret_color", PLAYER_COLOR)
-	# carved slot: slim card frame; focus = warm >1 modulate reads as a gold glow on the rim
-	var sb: StyleBoxTexture = StyleBoxTexture.new()
-	sb.texture = TEX_CARD
-	sb.set_texture_margin_all(16.0) # LineEdit is ~34px tall; larger margins would crush the 9-patch
+	# recessed carved slot (like the stat-bar grooves) — the 9-patch card frame
+	# can't survive a ~34px-tall control, its corner patches overlap
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.025, 0.01, 0.9)
+	sb.set_corner_radius_all(5)
+	sb.set_border_width_all(1)
+	sb.border_color = BORDER_BROWN
 	sb.content_margin_left = 10.0
 	sb.content_margin_right = 10.0
 	sb.content_margin_top = 6.0
 	sb.content_margin_bottom = 6.0
 	e.add_theme_stylebox_override("normal", sb)
-	var sb_f: StyleBoxTexture = sb.duplicate()
-	sb_f.modulate_color = Color(1.35, 1.2, 0.85)
+	var sb_f: StyleBoxFlat = sb.duplicate()
+	sb_f.border_color = PLAYER_COLOR # gold rim while typing
 	e.add_theme_stylebox_override("focus", sb_f)
 	return e
 
@@ -2444,73 +2532,102 @@ func _on_mp_cancel_pressed() -> void:
 
 
 func _build_craft_panel() -> void:
-	craft_panel = _mk_fullrect_center()
-	craft_panel.offset_right = -240.0 # leave a strip of arena visible for the 3D preview
-	var box: PanelContainer = _mk_panel_box()
-	craft_panel.add_child(box)
-	var v: VBoxContainer = VBoxContainer.new()
-	v.add_theme_constant_override("separation", 7) # panel must fit the 720px viewport incl. Back/FIGHT
-	box.add_child(v)
+	# fighter-select: the center stays clear so the arena and the spinning hero
+	# top show through; header on top, roster arrows at the sides, stats + forge
+	# sheet along the bottom
+	craft_panel = Control.new()
+	craft_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	craft_panel.visible = false
+	craft_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(craft_panel)
+	_all_panels.append(craft_panel)
+
+	var header_wrap: CenterContainer = CenterContainer.new()
+	header_wrap.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	header_wrap.offset_top = 8.0
+	header_wrap.offset_bottom = 124.0
+	craft_panel.add_child(header_wrap)
+	var header: PanelContainer = _mk_panel_box(true, 2.0)
+	header_wrap.add_child(header)
+	var hv: VBoxContainer = VBoxContainer.new()
+	hv.add_theme_constant_override("separation", 2)
+	header.add_child(hv)
 	craft_title = _mk_title("", 24)
-	v.add_child(craft_title)
+	hv.add_child(craft_title)
 	craft_duel_label = _mk_label("", 16)
-	v.add_child(craft_duel_label)
+	hv.add_child(craft_duel_label)
 	craft_sub = _mk_label("", 13, CREAM_MUTED)
 	craft_sub.visible = false
-	v.add_child(craft_sub)
+	hv.add_child(craft_sub)
 
-	var cards: GridContainer = GridContainer.new()
-	cards.columns = 4 # 13 styles: defaults, old bosses, then the 7 masters
-	cards.add_theme_constant_override("h_separation", 10)
-	cards.add_theme_constant_override("v_separation", 10)
-	var cards_scroll: ScrollContainer = ScrollContainer.new()
-	cards_scroll.custom_minimum_size = Vector2(860.0, 228.0)
-	cards_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var cards_wrap: CenterContainer = CenterContainer.new()
-	cards_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cards_wrap.add_child(cards)
-	cards_scroll.add_child(cards_wrap)
-	v.add_child(cards_scroll)
-	stat_legend_label = _mk_label("", 12, Color(0.7, 0.62, 0.5))
-	v.add_child(stat_legend_label)
-	for id: String in STYLE_DEFS:
-		var def: Dictionary = STYLE_DEFS[id]
-		var card: PanelContainer = _mk_panel_box(true)
-		cards.add_child(card)
-		var cv: VBoxContainer = VBoxContainer.new()
-		cv.add_theme_constant_override("separation", 5)
-		card.add_child(cv)
-		var pick: Button = _mk_button(def.label, WOOD_AMBER)
-		pick.pressed.connect(_on_shape_selected.bind(id))
-		cv.add_child(pick)
-		var role: Label = _mk_label("", 12, Color(0.78, 0.7, 0.56))
-		cv.add_child(role)
-		var mass_row: Dictionary = _mk_stat_row(cv, Color(0.85, 0.45, 0.25), true)
-		var spin_row: Dictionary = _mk_stat_row(cv, Color(0.35, 0.75, 0.9), true)
-		var bal_row: Dictionary = _mk_stat_row(cv, Color(0.5, 0.85, 0.4), true)
-		shape_cards[id] = {
-			"card": card,
-			"pick": pick,
-			"role": role,
-			"mass": mass_row.bar,
-			"spin_reserve": spin_row.bar,
-			"balance": bal_row.bar,
-			"mass_over": mass_row.over,
-			"spin_over": spin_row.over,
-			"bal_over": bal_row.over,
-			"stat_labels": [mass_row.label, spin_row.label, bal_row.label],
-		}
+	craft_prev_button = _mk_button("<", WOOD_DARK, true)
+	craft_next_button = _mk_button(">", WOOD_DARK, true)
+	for arrow: Button in [craft_prev_button, craft_next_button]:
+		arrow.add_theme_font_size_override("font_size", 40)
+		arrow.custom_minimum_size = Vector2(64.0, 96.0)
+		arrow.anchor_top = 0.36
+		arrow.anchor_bottom = 0.36
+		arrow.offset_top = -48.0
+		arrow.offset_bottom = 48.0
+		craft_panel.add_child(arrow)
+	craft_prev_button.offset_left = 28.0
+	craft_prev_button.offset_right = 92.0
+	craft_next_button.anchor_left = 1.0
+	craft_next_button.anchor_right = 1.0
+	craft_next_button.offset_left = -92.0
+	craft_next_button.offset_right = -28.0
+	craft_prev_button.pressed.connect(_craft_cycle.bind(-1))
+	craft_next_button.pressed.connect(_craft_cycle.bind(1))
+
+	# bottom sheet auto-heights from content: anchored to the bottom edge and
+	# grown upward, so it can never overflow the 720px viewport like the old grid
+	var sheet: PanelContainer = _mk_panel_box(true, 6.0)
+	sheet.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	sheet.offset_left = 80.0
+	sheet.offset_right = -80.0
+	sheet.offset_top = -12.0
+	sheet.offset_bottom = -12.0
+	sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	craft_panel.add_child(sheet)
+	var v: VBoxContainer = VBoxContainer.new()
+	v.add_theme_constant_override("separation", 5)
+	sheet.add_child(v)
+
+	var name_row: HBoxContainer = HBoxContainer.new()
+	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	name_row.add_theme_constant_override("separation", 10)
+	v.add_child(name_row)
+	craft_name_label = _mk_title("", 22)
+	name_row.add_child(craft_name_label)
+	craft_counter_label = _mk_label("", 13, CREAM_MUTED)
+	craft_counter_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_row.add_child(craft_counter_label)
+	craft_status_label = _mk_label("", 14)
+	v.add_child(craft_status_label)
+
+	var stats_row: HBoxContainer = HBoxContainer.new()
+	stats_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	stats_row.add_theme_constant_override("separation", 24)
+	v.add_child(stats_row)
+	craft_stat_rows = [
+		_mk_stat_row(stats_row, Color(0.85, 0.45, 0.25), true),
+		_mk_stat_row(stats_row, Color(0.35, 0.75, 0.9), true),
+		_mk_stat_row(stats_row, Color(0.5, 0.85, 0.4), true),
+	]
+	for r: Dictionary in craft_stat_rows:
+		(r.bar as ProgressBar).custom_minimum_size = Vector2(130.0, 14.0)
 
 	craft_mats_hint = _mk_label("", 14)
 	v.add_child(craft_mats_hint)
-	var mats_row: HBoxContainer = HBoxContainer.new()
-	mats_row.add_theme_constant_override("separation", 12)
-	mats_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_child(mats_row)
+	var forge_box: HBoxContainer = HBoxContainer.new()
+	forge_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	forge_box.add_theme_constant_override("separation", 20)
+	v.add_child(forge_box)
+	craft_forge_box = forge_box
 	for mat_id: String in MATERIAL_DEFS:
 		var mat_col: VBoxContainer = VBoxContainer.new()
 		mat_col.add_theme_constant_override("separation", 4)
-		mats_row.add_child(mat_col)
+		forge_box.add_child(mat_col)
 		var mb: Button = _mk_button("", WOOD_DARK, true)
 		mb.icon = load("res://assets/icon_%s.png" % mat_id)
 		mb.add_theme_constant_override("icon_max_width", 38)
@@ -2527,12 +2644,14 @@ func _build_craft_panel() -> void:
 	accent_row = HBoxContainer.new()
 	accent_row.add_theme_constant_override("separation", 8)
 	accent_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	v.add_child(accent_row)
+	forge_box.add_child(accent_row)
 	accent_label = _mk_label("", 13)
 	accent_row.add_child(accent_label)
 	for c: Color in ACCENT_CHOICES:
 		var sw: Button = Button.new()
 		sw.custom_minimum_size = Vector2(26.0, 26.0)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER # don't stretch to the forge row's height
+		sw.focus_mode = Control.FOCUS_NONE
 		var sb: StyleBoxFlat = StyleBoxFlat.new()
 		sb.bg_color = c
 		sb.set_corner_radius_all(6)
@@ -2547,20 +2666,19 @@ func _build_craft_panel() -> void:
 	craft_info = _mk_label("", 14, Color(0.85, 0.8, 0.65))
 	v.add_child(craft_info)
 	craft_opp_status = _mk_label("", 14, FOE_COLOR)
+	craft_opp_status.visible = false
 	v.add_child(craft_opp_status)
 	fight_button = _mk_button("", PLAYER_COLOR)
 	fight_button.add_theme_font_size_override("font_size", 22)
 	fight_button.pressed.connect(_on_fight_pressed)
 	craft_back_button = _mk_button("", WOOD_DARK, true)
 	craft_back_button.pressed.connect(_on_over_menu_pressed) # SP: reset run -> title; MP: leave lobby -> title
-	var btn_row: HBoxContainer = HBoxContainer.new() # Back + FIGHT on one row so the tall panel doesn't overflow
+	var btn_row: HBoxContainer = HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 16)
 	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	btn_row.add_child(craft_back_button)
 	btn_row.add_child(fight_button)
-	var fb_wrap: CenterContainer = CenterContainer.new()
-	fb_wrap.add_child(btn_row)
-	v.add_child(fb_wrap)
+	v.add_child(btn_row)
 
 
 func _build_cutscene_panel() -> void:
@@ -2612,7 +2730,7 @@ func _build_cutscene_panel() -> void:
 	text_box.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	text_box.offset_left = 70.0
 	text_box.offset_right = -70.0
-	text_box.offset_top = -216.0
+	text_box.offset_top = -228.0
 	text_box.offset_bottom = -24.0
 	text_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	cutscene_panel.add_child(text_box)
@@ -2777,53 +2895,52 @@ func _refresh_craft() -> void:
 		else:
 			craft_duel_label.text = _t("craft_duel_line") % [mini(duel_index + 1, MASTERS.size()), MASTERS.size(), opp.name]
 	craft_sub.visible = net_active
-	craft_mats_hint.visible = not net_active # MP is equal-footing: no forging
+	craft_opp_status.visible = net_active
+
+	var viewed: String = _craft_viewed()
+	var def: Dictionary = STYLE_DEFS[viewed]
+	var locked: bool = not unlocked_styles.has(viewed)
+	var idx: int = _master_index(viewed)
+	var gated: bool = idx >= 0 and not defeated_masters.has(String(MASTERS[idx].id))
+	var buyable: bool = locked and not net_active and not gated
+
+	craft_name_label.text = String(def.label)
+	craft_counter_label.text = "%d / %d" % [craft_index + 1, STYLE_DEFS.size()]
+	if locked:
+		if net_active:
+			craft_status_label.text = _t("locked_mp")
+		elif gated:
+			craft_status_label.text = _t("locked_hint") % String(MASTERS[idx].name)
+		else:
+			craft_status_label.text = _t("price_tag") % int(def.get("price", 0))
+		craft_status_label.add_theme_color_override("font_color", COPPER)
+	else:
+		craft_status_label.text = _t("role_" + viewed)
+		craft_status_label.add_theme_color_override("font_color", Color(0.78, 0.7, 0.56))
+
+	var stats: Dictionary = def if net_active else player_shapes[viewed] # MP shows base = what you fight with
+	_tween_bar(craft_stat_rows[0].bar, (stats.mass - 1.4) / 1.6)
+	_tween_bar(craft_stat_rows[1].bar, (stats.spin_reserve - 60.0) / 50.0)
+	_tween_bar(craft_stat_rows[2].bar, (stats.balance - 55.0) / 30.0)
+	_tween_bar(craft_stat_rows[0].over, (def.mass - 1.4) / 1.6)
+	_tween_bar(craft_stat_rows[1].over, (def.spin_reserve - 60.0) / 50.0)
+	_tween_bar(craft_stat_rows[2].over, (def.balance - 55.0) / 30.0)
+
+	# forging/recoloring targets selected_shape, so hide the forge while browsing
+	# a locked style (selected_shape is some other top) and in MP (equal footing)
+	var forging: bool = not net_active and not locked
+	craft_forge_box.visible = forging
+	craft_mats_hint.visible = forging
+	craft_mats_hint.text = _t("mats_hint") + "  ·  %d duit" % coins
 	for mat_id: String in MATERIAL_DEFS:
-		var mb: Button = material_buttons[mat_id]
-		mb.visible = not net_active
-		var def: Dictionary = MATERIAL_DEFS[mat_id]
-		mb.text = "%s ×%d\n%s" % [def.label, materials_owned.get(mat_id, 0), _t("desc_" + mat_id)]
-		var buy: Button = material_buy_buttons[mat_id]
-		buy.visible = not net_active
-		buy.text = _t("mat_buy") % int(MAT_PRICES[mat_id])
-	accent_row.visible = not net_active
-	for id: String in shape_cards:
-		var card: Dictionary = shape_cards[id]
-		var base: Dictionary = STYLE_DEFS[id]
-		var stats: Dictionary = base if net_active else player_shapes[id] # MP shows base = what you fight with
-		var locked: bool = not unlocked_styles.has(id)
-		_tween_bar(card.mass, (stats.mass - 1.4) / 1.6)
-		_tween_bar(card.spin_reserve, (stats.spin_reserve - 60.0) / 50.0)
-		_tween_bar(card.balance, (stats.balance - 55.0) / 30.0)
-		_tween_bar(card.mass_over, (base.mass - 1.4) / 1.6)
-		_tween_bar(card.spin_over, (base.spin_reserve - 60.0) / 50.0)
-		_tween_bar(card.bal_over, (base.balance - 55.0) / 30.0)
-		var role: Label = card.role
-		var pick: Button = card.pick
-		if locked:
-			var idx: int = _master_index(id)
-			var gated: bool = idx >= 0 and not defeated_masters.has(String(MASTERS[idx].id))
-			if gated:
-				role.text = _t("locked_hint") % String(MASTERS[idx].name)
-				pick.text = String(STYLE_DEFS[id].label)
-			else:
-				role.text = _t("price_tag") % int(STYLE_DEFS[id].get("price", 0))
-				pick.text = _t("buy_prefix") + String(STYLE_DEFS[id].label)
-			role.add_theme_color_override("font_color", COPPER)
-			pick.disabled = net_active # locked cards double as buy buttons in SP
-		else:
-			role.text = _t("role_" + id)
-			role.add_theme_color_override("font_color", Color(0.78, 0.7, 0.56))
-			pick.disabled = false
-			var prefix: String = "> " if id == selected_shape else ""
-			pick.text = prefix + String(STYLE_DEFS[id].label)
-		var panel: PanelContainer = card.card
-		if locked:
-			panel.modulate = Color(0.42, 0.42, 0.42, 1.0)
-		elif id == selected_shape:
-			panel.modulate = Color(1.0, 1.0, 1.0, 1.0)
-		else:
-			panel.modulate = Color(0.68, 0.68, 0.68, 1.0)
+		var mdef: Dictionary = MATERIAL_DEFS[mat_id]
+		material_buttons[mat_id].text = "%s ×%d\n%s" % [mdef.label, materials_owned.get(mat_id, 0), _t("desc_" + mat_id)]
+		material_buy_buttons[mat_id].text = _t("mat_buy") % int(MAT_PRICES[mat_id])
+
+	# the confirm button doubles as the BUY button on a locked-but-buyable style
+	fight_button.text = (_t("buy_prefix") + String(def.label)) if buyable else _t("fight")
+	fight_button.modulate = Color(1.0, 0.78, 0.6) if buyable else Color(1.0, 1.0, 1.0)
+	fight_button.disabled = (locked and not buyable) or (net_active and net_ready_sent)
 
 
 func _tween_bar(bar: ProgressBar, value: float) -> void:
