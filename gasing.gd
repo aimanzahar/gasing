@@ -17,6 +17,7 @@ var radius: float = 0.44
 var accent_color: Color = Color(1.0, 0.8, 0.25)
 
 var puppet: bool = false # remote-controlled: net snapshots drive x/z/spin/wobble; die() is RPC-driven
+var arcana: bool = false # the KL rainbow gasing: hue-cycling aura + particle trail
 var spin: float = 0.0
 var launch_spin: float = 1.0
 var velocity: Vector3 = Vector3.ZERO
@@ -33,6 +34,8 @@ var _body_mat: StandardMaterial3D = null
 var _accent_mat: StandardMaterial3D = null
 var _spin_angle: float = 0.0
 var _lean_phase: float = 0.0
+var _trail: CPUParticles3D = null
+var _hue: float = 0.0
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 @onready var _visual: Node3D = $Visual
@@ -51,6 +54,7 @@ func setup(p_name: String, p_shape: String, stats: Dictionary, p_accent: Color) 
 	balance = stats.get("balance", 70.0)
 	accent_color = p_accent
 	mesh_id = String(stats.get("mesh", p_shape))
+	arcana = mesh_id == "kl"
 	radius = 0.56 if shape_id == "uri" else 0.44
 	_rng.randomize()
 	_build_visual()
@@ -60,6 +64,8 @@ func _build_visual() -> void:
 	for child: Node in _visual.get_children():
 		child.queue_free()
 	var packed: PackedScene = load("res://assets/gasing_%s.glb" % mesh_id)
+	if packed == null:
+		packed = load("res://assets/gasing_jantung.glb") # master GLB not produced yet
 	var inst: Node3D = packed.instantiate() as Node3D
 	_visual.add_child(inst)
 	_spin_node = inst
@@ -87,6 +93,40 @@ func _build_visual() -> void:
 	hl_mat.emission = accent_color
 	hl_mat.emission_energy_multiplier = 2.2
 	_highlight.set_surface_override_material(0, hl_mat)
+	if arcana:
+		_build_arcana()
+
+
+func _build_arcana() -> void:
+	_accent_mat.emission_energy_multiplier = 1.2
+	if _trail != null:
+		_trail.queue_free()
+	_trail = CPUParticles3D.new()
+	_trail.local_coords = false # particles stay behind in world space = ribbon trail
+	_trail.amount = 42
+	_trail.lifetime = 0.7
+	_trail.emitting = false
+	_trail.gravity = Vector3.ZERO
+	_trail.initial_velocity_max = 0.25
+	_trail.scale_amount_min = 0.05
+	_trail.scale_amount_max = 0.12
+	var pm: SphereMesh = SphereMesh.new()
+	pm.radius = 0.05
+	pm.height = 0.1
+	_trail.mesh = pm
+	var pmat: StandardMaterial3D = StandardMaterial3D.new()
+	pmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	pmat.vertex_color_use_as_albedo = true
+	pmat.emission_enabled = true
+	pmat.emission = Color.WHITE
+	pmat.emission_energy_multiplier = 1.5
+	pm.material = pmat
+	var grad: Gradient = Gradient.new()
+	for i: int in 7:
+		grad.add_point(float(i) / 6.0, Color.from_hsv(float(i) / 6.0, 0.85, 1.0))
+	_trail.color_ramp = grad
+	_trail.position.y = 0.15
+	add_child(_trail)
 
 
 func _build_dir_arrow() -> void:
@@ -201,6 +241,8 @@ func die(reason: String) -> void:
 	_highlight.visible = false
 	if _dir_arrow != null:
 		_dir_arrow.visible = false
+	if _trail != null:
+		_trail.emitting = false
 	var tw: Tween = create_tween()
 	if reason == "topple":
 		var fall: Vector3 = _visual.rotation
@@ -261,6 +303,14 @@ func _physics_process(delta: float) -> void:
 func _process(delta: float) -> void:
 	if not alive:
 		return
+	if arcana and _accent_mat != null:
+		# rainbow arcana: cycle the accent hue; runs on puppets too (cosmetic only)
+		_hue = wrapf(_hue + delta * 0.35, 0.0, 1.0)
+		var c: Color = Color.from_hsv(_hue, 0.85, 1.0)
+		_accent_mat.albedo_color = c
+		_accent_mat.emission = c
+		if _trail != null:
+			_trail.emitting = battling and spin > 1.0
 	var visual_rate: float = spin * 0.4 if battling else 1.2
 	_spin_angle = wrapf(_spin_angle + visual_rate * delta, 0.0, TAU)
 	if _spin_node != null:
