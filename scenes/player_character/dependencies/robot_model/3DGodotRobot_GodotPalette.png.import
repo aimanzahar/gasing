@@ -4,8 +4,9 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://bdg48m6l86q8i"
 path.s3tc="res://.godot/imported/3DGodotRobot_GodotPalette.png-69f98ad3b1b34e9fd540597beaefb127.s3tc.ctex"
+path.etc2="res://.godot/imported/3DGodotRobot_GodotPalette.png-69f98ad3b1b34e9fd540597beaefb127.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 generator_parameters={
@@ -15,7 +16,7 @@ generator_parameters={
 [deps]
 
 source_file="res://scenes/player_character/dependencies/robot_model/3DGodotRobot_GodotPalette.png"
-dest_files=["res://.godot/imported/3DGodotRobot_GodotPalette.png-69f98ad3b1b34e9fd540597beaefb127.s3tc.ctex"]
+dest_files=["res://.godot/imported/3DGodotRobot_GodotPalette.png-69f98ad3b1b34e9fd540597beaefb127.s3tc.ctex", "res://.godot/imported/3DGodotRobot_GodotPalette.png-69f98ad3b1b34e9fd540597beaefb127.etc2.ctex"]
 
 [params]
 

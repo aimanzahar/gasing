@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://fpmmv2oxjcdv"
 path.s3tc="res://.godot/imported/GodotPalette.png-e5bf495c82ae7a9cbcf0b93d3dd26382.s3tc.ctex"
+path.etc2="res://.godot/imported/GodotPalette.png-e5bf495c82ae7a9cbcf0b93d3dd26382.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://scenes/player_character/dependencies/robot_model/GodotRobotPaletteSwap/GodotPalette.png"
-dest_files=["res://.godot/imported/GodotPalette.png-e5bf495c82ae7a9cbcf0b93d3dd26382.s3tc.ctex"]
+dest_files=["res://.godot/imported/GodotPalette.png-e5bf495c82ae7a9cbcf0b93d3dd26382.s3tc.ctex", "res://.godot/imported/GodotPalette.png-e5bf495c82ae7a9cbcf0b93d3dd26382.etc2.ctex"]
 
 [params]
 

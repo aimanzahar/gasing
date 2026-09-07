@@ -10,8 +10,20 @@ var _custom_variables: Array[String]: get = _get_custom_variables # Lists the re
 
 static func from_dict(dict: Dictionary) -> PlayerData:
 	var player_data := PlayerData.new()
-	for key in dict:
-		player_data.set(key,dict[key])
+	var raw_id: Variant = dict.get("multiplayer_id", 0)
+	if raw_id is int:
+		player_data.multiplayer_id = maxi(raw_id, 0)
+	var raw_name: Variant = dict.get("display_name", "Player")
+	if raw_name is String:
+		player_data.display_name = raw_name.replace("\n", " ").replace("\r", " ").replace("\t", " ").strip_edges().left(32)
+		if player_data.display_name.is_empty():
+			player_data.display_name = "Player"
+	var raw_steam_id: Variant = dict.get("steam_id", -1)
+	if raw_steam_id is int:
+		player_data.steam_id = maxi(raw_steam_id, -1)
+	var raw_color: Variant = dict.get("color", Color.WHITE)
+	if raw_color is Color and is_finite(raw_color.r) and is_finite(raw_color.g) and is_finite(raw_color.b) and is_finite(raw_color.a):
+		player_data.color = Color(clampf(raw_color.r, 0.0, 1.0), clampf(raw_color.g, 0.0, 1.0), clampf(raw_color.b, 0.0, 1.0), clampf(raw_color.a, 0.0, 1.0))
 	return player_data
 
 static func apply_data_to_node(data: PlayerData, node: Node) -> void:

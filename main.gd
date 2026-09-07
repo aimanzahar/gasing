@@ -3,6 +3,7 @@ extends Node3D
 enum State { READY, CRAFT, WIND, LAUNCH, BATTLE, ROUND_OVER, OVER, CUTSCENE }
 enum MenuScreen { TITLE, MP, WAIT }
 
+const ARENA_SCRIPT: Script = preload("res://scripts/arena_match.gd")
 const GASING_SCENE: PackedScene = preload("res://gasing.tscn")
 const FONT_TITLE: FontFile = preload("res://common/fonts/Kurland.ttf")
 const TEX_PANEL: Texture2D = preload("res://assets/ui/panel_ukiran.png")
@@ -25,10 +26,6 @@ const SND_WIN: AudioStream = preload("res://assets/audio/confirmation_002.ogg")
 const SND_LOSE: AudioStream = preload("res://assets/audio/error_008.ogg")
 const SND_CLICK: AudioStream = preload("res://assets/audio/click_002.ogg")
 const SND_NUDGE: AudioStream = preload("res://assets/audio/click_004.ogg")
-const NUDGE_POWER: float = 2.4
-const MAX_IMPULSE: float = 6.0
-const NUDGE_SPIN_COST: float = 2.0
-const NUDGE_COOLDOWN: float = 0.35
 const PLAYER_COLOR: Color = Color(1.0, 0.78, 0.25)
 const FOE_COLOR: Color = Color(0.2, 0.85, 0.8)
 const TEXT_COLOR: Color = Color(0.96, 0.9, 0.78)
@@ -63,6 +60,7 @@ const STYLE_DEFS: Dictionary = {
 	"kl": {"label": "Gasing Merdeka", "shape": "uri", "mesh": "kl", "mass": 2.6, "spin_reserve": 92.0, "balance": 80.0, "price": 350},
 }
 const DEFAULT_STYLES: Array[String] = ["jantung", "uri"]
+const LEVEL_XP: Array[int] = [0, 100, 250, 450, 700]
 const NET_MATCH_TARGET: int = 3
 const SAVE_PATH: String = "user://workshop.cfg"
 # per-arena mood presets; "env" GLB swaps the kampung backdrop when the file exists,
@@ -236,7 +234,14 @@ const STRINGS: Dictionary = {
 		"craft_duel_line": "Duel %d / %d  —  Next opponent: %s",
 		"mats_line": "Duit %d  ·  Merbau %d  ·  Kemuning %d  ·  Besi %d",
 		"mats_hint": "Materials — click to forge onto the selected gasing:",
-		"pick_info": "Pick your gasing for this duel.",
+		"pick_info": "Pick three gasing. Drag to inspect, scroll to zoom, double-click to reset.",
+		"level_xp": "Lv.%d · %d/%d XP",
+		"level_max": "Lv.%d · MAX",
+		"difficulty_normal": "Normal",
+		"difficulty_hard": "Hard",
+		"difficulty_master": "Master",
+		"difficulty_tip": "Opponent difficulty",
+		"loadout_tip": "Choose a slot, then browse to assign its gasing. Duplicate styles are allowed.",
 		"selected_info": "%s selected.",
 		"no_mat": "No %s — win duels to earn materials!",
 		"forged": "%s forged onto %s!",
@@ -270,7 +275,7 @@ const STRINGS: Dictionary = {
 		"tip_stat_balance": "Balance — steadiness as spin fades.\nWobble lean shrinks as Balance rises:\na balanced top staggers less and topples later.",
 		"stat_legend": "Mass = strike power  ·  Spin = stamina  ·  Balance = steadiness  (hover a stat for details)",
 		"meter": "WIND",
-		"battle_hint": "Click the arena to push your gasing — each push costs spin!",
+		"battle_hint": "Click to push for free. SHIFT dash, hold E rush, SPACE jump, 1/2/3 switch.",
 		"tip_merbau": "Merbau — dense heartwood.\n+0.3 Mass: your strikes shove rivals harder\nand this top resists knockback.",
 		"tip_kemuning": "Kemuning — fine golden wood.\n+7 Balance: wobbles later as spin fades\nand resists toppling when struck.",
 		"tip_besi": "Besi — a heavy iron core.\n+0.5 Mass: much harder pangkah strikes.",
@@ -357,7 +362,14 @@ const STRINGS: Dictionary = {
 		"craft_duel_line": "Duel %d / %d  —  Lawan seterusnya: %s",
 		"mats_line": "Duit %d  ·  Merbau %d  ·  Kemuning %d  ·  Besi %d",
 		"mats_hint": "Bahan kraf — klik untuk tempa pada gasing terpilih:",
-		"pick_info": "Pilih gasing untuk duel ini.",
+		"pick_info": "Pilih tiga gasing. Seret untuk lihat, skrol untuk zum, klik dua kali untuk set semula.",
+		"level_xp": "Lv.%d · %d/%d XP",
+		"level_max": "Lv.%d · MAKS",
+		"difficulty_normal": "Biasa",
+		"difficulty_hard": "Susah",
+		"difficulty_master": "Mahaguru",
+		"difficulty_tip": "Tahap kesukaran lawan",
+		"loadout_tip": "Pilih slot, kemudian tukar gasing dengan anak panah. Boleh guna jenis yang sama.",
 		"selected_info": "%s dipilih.",
 		"no_mat": "Tiada %s — menang duel untuk dapat bahan!",
 		"forged": "%s ditempa pada %s!",
@@ -476,6 +488,10 @@ var state: State = State.READY
 var player_shapes: Dictionary = {}
 var materials_owned: Dictionary = {}
 var selected_shape: String = "jantung"
+var loadout: Array[String] = ["jantung", "uri", "jantung"]
+var loadout_slot: int = 0
+var difficulty: int = 1 # Normal / Hard / Master
+var style_xp: Dictionary = {}
 var unlocked_styles: Array[String] = []
 var coins: int = 0
 var defeated_masters: Array[String] = [] # master ids beaten in the campaign (gates shop purchases)
@@ -483,23 +499,19 @@ var style_accents: Dictionary = {} # style_id -> Color, player-chosen lacquer tr
 var endless_best: int = 0
 var endless_mode: bool = false
 var workshop_preview: Node3D = null
+var _inspect_dragging: bool = false
+var _inspect_yaw: float = 0.0
+var _inspect_pitch: float = 0.0
+var _inspect_zoom: float = 2.8
+var _preview_tween: Tween = null
 var duel_index: int = 0
 var run_won: bool = false
+var arena: Node = null
 var player_top: Gasing = null
 var foe_top: Gasing = null
-var wind_power: float = 0.0
-var winding: bool = false
-var aim_angle: float = 0.0
-var hit_cooldown: float = 0.0
-var nudge_cooldown: float = 0.0
-var ai_think_timer: float = 1.0
-var ai_tier: float = 0.0 # 0..1.3 difficulty scalar, cached per battle in _do_launch
-var ai_dodge_cd: float = 0.0 # reactive dodge cooldown — bounds the spin cost of dodging
 var _marker_tween: Tween = null
 var _sfx_pool: Array[AudioStreamPlayer] = []
 var _sfx_index: int = 0
-var last_striker: String = ""
-var last_wind_effectiveness: float = 0.0
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 var ready_panel: Control = null
@@ -510,8 +522,8 @@ var hud: Control = null
 var wind_meter: WindMeter = null
 var wind_hint: Label = null
 var battle_hint: Label = null
-var player_gauge: SpinGauge = null
-var foe_gauge: SpinGauge = null
+var player_gauge: FightBar = null
+var foe_gauge: FightBar = null
 var duel_label: Label = null
 var mats_label: Label = null
 var ready_heritage: Label = null
@@ -547,6 +559,11 @@ var craft_next_button: Button = null
 var craft_name_label: Label = null
 var craft_counter_label: Label = null
 var craft_status_label: Label = null
+var craft_level_label: Label = null
+var craft_loadout_buttons: Array[Button] = []
+var craft_difficulty: OptionButton = null
+var craft_sheet: Control = null
+var craft_header: Control = null
 var craft_stat_rows: Array = [] # 3 dicts from _mk_stat_row: mass, spin, balance
 var craft_forge_box: Control = null
 var material_buttons: Dictionary = {}
@@ -608,22 +625,15 @@ var craft_back_button: Button = null
 var net_active: bool = false
 var net_ended: bool = false
 var net_opp_name: String = ""
-var net_opp_config: Dictionary = {}
 var net_ready_sent: bool = false
-var net_wind_sent: bool = false
-var net_my_wind: Vector2 = Vector2.ZERO
-var net_opp_wind: Vector2 = Vector2.ZERO
-var net_opp_wind_in: bool = false
 var net_my_wins: int = 0
 var net_opp_wins: int = 0
-var net_client_nudge_cd: float = 0.0
 var net_rematch_sent: bool = false
-var net_opp_rematch: bool = false
 var net_bonus_text: String = "" # match-bonus line cached for the match-over screen
 var net_match_mats: Dictionary = {} # per-match material tally for the match-over screen
 
 var _netbot: bool = false # debug autopilot for LAN testing: run with `-- netbot-host` or `-- netbot-join`
-var _netbot_cd: float = 0.0
+var _test_mode: bool = false
 
 @onready var camera: Camera3D = $Camera3D
 @onready var aim_arrow: Node3D = $AimArrow
@@ -633,12 +643,20 @@ var _netbot_cd: float = 0.0
 
 
 func _ready() -> void:
+	var args: PackedStringArray = OS.get_cmdline_user_args()
+	_test_mode = "--test-mode" in args
+	_netbot = "netbot-host" in args or "netbot-join" in args
 	_rng.randomize()
 	_build_sfx_pool()
 	aim_arrow.visible = false
 	_polish_visuals()
 	_configure_burst()
 	_build_ui()
+	arena = ARENA_SCRIPT.new()
+	arena.name = "Arena"
+	arena.game = self
+	add_child(arena)
+	arena.build_ui()
 	Online.joined_lobby.connect(_on_mp_joined_lobby)
 	Online.player_connected.connect(_on_mp_player_connected)
 	Online.player_disconnected.connect(_on_mp_player_disconnected)
@@ -854,7 +872,6 @@ func _enter_state(next: State) -> void:
 			_clear_tops()
 			_set_hud_visible(false)
 			net_ready_sent = false
-			net_opp_config = {}
 			craft_index = maxi(0, STYLE_DEFS.keys().find(selected_shape))
 			craft_opp_status.text = ""
 			craft_info.text = _t("pick_info")
@@ -869,32 +886,10 @@ func _enter_state(next: State) -> void:
 		State.WIND:
 			_show_panel(null)
 			_set_hud_visible(true)
-			net_wind_sent = false
-			net_opp_wind_in = false
-			battle_hint.visible = false
-			player_gauge.visible = false
-			foe_gauge.visible = false
-			wind_meter.visible = true
-			wind_hint.visible = true
-			wind_hint.text = _t("wind_hint")
-			wind_power = 0.0
-			wind_meter.power = 0.0
-			wind_meter.shown = 0.0
-			winding = false
-			aim_angle = 0.0
-			aim_arrow.rotation.y = 0.0
-			aim_arrow.visible = true
-			player_top = _spawn_top(true)
-			player_top.set_winding(true)
-			_update_top_bar()
+			arena.begin_wind()
 		State.LAUNCH:
-			wind_meter.visible = false
-			wind_hint.visible = false
-			aim_arrow.visible = false
-			_do_launch()
+			pass # launches are per slot now
 		State.BATTLE:
-			player_gauge.visible = true
-			foe_gauge.visible = true
 			battle_hint.visible = true
 		State.ROUND_OVER:
 			pass
@@ -914,7 +909,32 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				_enter_state(State.CRAFT)
 		State.CRAFT:
-			if event.is_action_pressed("ui_left"):
+			if event is InputEventMouseButton:
+				var click: InputEventMouseButton = event
+				if click.button_index == MOUSE_BUTTON_LEFT and not click.pressed:
+					_inspect_dragging = false
+				elif click.pressed and _preview_contains(click.position):
+					if click.button_index == MOUSE_BUTTON_LEFT:
+						_inspect_dragging = not click.double_click
+						if click.double_click:
+							_inspect_yaw = 0.0
+							_inspect_pitch = 0.0
+							_inspect_zoom = 2.8
+						_apply_inspection()
+						get_viewport().set_input_as_handled()
+					elif click.button_index == MOUSE_BUTTON_WHEEL_UP or click.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+						_inspect_zoom = clampf(_inspect_zoom + (0.2 if click.button_index == MOUSE_BUTTON_WHEEL_UP else -0.2), 1.8, 3.6)
+						_apply_inspection()
+						get_viewport().set_input_as_handled()
+			elif event is InputEventMouseMotion and _inspect_dragging:
+				var motion: InputEventMouseMotion = event
+				_inspect_dragging = (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0
+				if _inspect_dragging:
+					_inspect_yaw = wrapf(_inspect_yaw + motion.relative.x * 0.012, -PI, PI)
+					_inspect_pitch = clampf(_inspect_pitch + motion.relative.y * 0.012, -1.1, 1.1)
+					_apply_inspection()
+					get_viewport().set_input_as_handled()
+			elif event.is_action_pressed("ui_left"):
 				get_viewport().set_input_as_handled()
 				_craft_cycle(-1)
 			elif event.is_action_pressed("ui_right"):
@@ -924,24 +944,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.is_action_pressed("ui_accept"):
 				get_viewport().set_input_as_handled()
 				_cutscene_advance()
-		State.BATTLE:
-			var click: InputEventMouseButton = event as InputEventMouseButton
-			if click != null and click.pressed and click.button_index == MOUSE_BUTTON_LEFT:
-				_try_nudge(click.position)
-		State.WIND:
-			if net_wind_sent:
-				return # released already — waiting for the opponent's wind
-			if event.is_action_pressed("wind"):
-				winding = true
-			elif event.is_action_released("wind") and winding:
-				winding = false
-				if net_active:
-					_net_release_wind()
-				else:
-					_enter_state(State.LAUNCH)
-			elif event is InputEventMouseMotion and winding:
-				var motion: InputEventMouseMotion = event
-				aim_angle = clampf(aim_angle - motion.relative.x * 0.003, -1.1, 1.1)
+		State.BATTLE, State.WIND:
+			arena.handle_input(event)
 		State.OVER:
 			if event.is_action_pressed("ui_accept"):
 				_on_restart_pressed() # SP restart / MP rematch / disconnect teardown
@@ -986,55 +990,55 @@ func _update_workshop_preview() -> void:
 	var g: Gasing = GASING_SCENE.instantiate() as Gasing
 	add_child(g)
 	g.setup("", String(STYLE_DEFS[viewed].shape), _style_battle_stats(viewed), _style_accent(viewed))
+	g.inspection_mode = true
+	g.set_inspect_rotation(0.0, 0.0)
 	workshop_preview = g
-	# the camera's center ray hits the ground plane at the world origin, so the
-	# hero top spins dead-center screen in the gelanggang ring — no unprojection
-	workshop_preview.position = Vector3.ZERO
+	# unproject to a point above screen center so the hero top spins in the
+	# clear band between the header and the bottom sheet
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var screen: Vector2 = Vector2(vp.x * 0.5, vp.y * 0.54)
+	var hit: Variant = Plane(Vector3.UP, 0.0).intersects_ray(camera.project_ray_origin(screen), camera.project_ray_normal(screen))
+	workshop_preview.position = hit if hit != null else Vector3.ZERO
 	workshop_preview.scale = Vector3(0.01, 0.01, 0.01)
-	var tw: Tween = create_tween()
-	tw.tween_property(workshop_preview, "scale", Vector3(2.6, 2.6, 2.6), 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_preview_tween = create_tween()
+	_preview_tween.tween_property(workshop_preview, "scale", Vector3.ONE * _inspect_zoom, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _preview_contains(point: Vector2) -> bool:
+	if not is_instance_valid(workshop_preview):
+		return false
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var top: float = craft_header.get_global_rect().end.y + 8.0
+	var bottom: float = craft_sheet.get_global_rect().position.y - 8.0
+	return Rect2(Vector2(vp.x * 0.15, top), Vector2(vp.x * 0.7, maxf(bottom - top, 0.0))).has_point(point)
+
+
+func _apply_inspection() -> void:
+	if not is_instance_valid(workshop_preview):
+		return
+	if _preview_tween != null and _preview_tween.is_valid():
+		_preview_tween.kill()
+	(workshop_preview as Gasing).set_inspect_rotation(_inspect_yaw, _inspect_pitch)
+	workshop_preview.scale = Vector3.ONE * _inspect_zoom
 
 
 func _clear_preview() -> void:
+	_inspect_dragging = false
+	_inspect_yaw = 0.0
+	_inspect_pitch = 0.0
+	_inspect_zoom = 2.8
+	if _preview_tween != null and _preview_tween.is_valid():
+		_preview_tween.kill()
+	_preview_tween = null
 	if is_instance_valid(workshop_preview):
 		workshop_preview.queue_free()
 	workshop_preview = null
 
 
 func _physics_process(delta: float) -> void:
-	if _netbot:
-		_netbot_tick(delta)
-	if state == State.WIND:
-		if net_wind_sent:
-			return # meter/arrow hidden while waiting for the opponent
-		var turn: float = Input.get_axis("aim_left", "aim_right")
-		aim_angle = clampf(aim_angle - turn * 1.5 * delta, -1.1, 1.1)
-		aim_arrow.rotation.y = aim_angle
-		if winding:
-			wind_power = minf(wind_power + 55.0 * delta, 100.0)
-		wind_meter.power = wind_power
-		return
-	if state != State.BATTLE:
-		return
-	hit_cooldown = maxf(hit_cooldown - delta, 0.0)
-	nudge_cooldown = maxf(nudge_cooldown - delta, 0.0)
-	if _net_sim_authority():
-		net_client_nudge_cd = maxf(net_client_nudge_cd - delta, 0.0)
-		var p_ok: bool = is_instance_valid(player_top) and player_top.alive
-		var f_ok: bool = is_instance_valid(foe_top) and foe_top.alive
-		if p_ok and f_ok:
-			if not net_active:
-				_ai_think(delta)
-			_check_collision()
-		_resolve_eliminations()
-		if net_active and state == State.BATTLE and p_ok and f_ok:
-			_net_snapshot.rpc(
-				Vector2(player_top.position.x, player_top.position.z), player_top.spin, player_top.wobble,
-				Vector2(foe_top.position.x, foe_top.position.z), foe_top.spin, foe_top.wobble)
-	_update_gauges()
+	if _netbot and arena != null:
+		arena.bot_tick(delta)
 
-
-# ---------------------------------------------------------------- launch
 
 func _wind_effectiveness(power: float) -> float:
 	if power > 95.0:
@@ -1046,87 +1050,13 @@ func _wind_effectiveness(power: float) -> float:
 	return 0.95 + 0.05 * ((power - 80.0) / 15.0)
 
 
-func _spawn_top(is_player: bool) -> Gasing:
-	var g: Gasing = GASING_SCENE.instantiate() as Gasing
-	g.name = "PlayerTop" if is_player else "FoeTop"
-	add_child(g)
-	g.puppet = net_active and not _net_is_host() # client renders both tops from host snapshots
-	if is_player:
-		var my_name: String = Online.personal_player_data.display_name if net_active else _t("you")
-		# MP keeps the gold-you/teal-them convention; custom lacquer is SP-only
-		var accent: Color = PLAYER_COLOR if net_active else _style_accent(selected_shape)
-		g.setup(my_name, String(STYLE_DEFS[selected_shape].shape), _style_battle_stats(selected_shape), accent)
-		g.position = Vector3(0.0, 0.0, 3.0)
-	elif net_active:
-		var opp_style: String = String(net_opp_config.get("shape", "jantung"))
-		g.setup(String(net_opp_config.get("name", net_opp_name)), String(STYLE_DEFS[opp_style].shape), net_opp_config.get("stats", STYLE_DEFS["jantung"]), FOE_COLOR)
-		g.position = Vector3(0.0, 0.0, -3.0)
-	else:
-		var opp: Dictionary = _current_opponent()
-		g.setup(opp.name, opp.shape, opp, opp.get("color", FOE_COLOR))
-		g.position = Vector3(0.0, 0.0, -3.0)
-	return g
 
 
-func _do_launch() -> void:
-	last_wind_effectiveness = _wind_effectiveness(wind_power)
-	var dir: Vector3 = Vector3.FORWARD.rotated(Vector3.UP, aim_angle)
-	player_top.set_winding(false)
-	player_top.launch(dir, last_wind_effectiveness)
-	_play_sfx(SND_LAUNCH, -4.0, 0.15)
-	if wind_power > 95.0:
-		_toast(_t("toast_snap"), Color(1.0, 0.35, 0.25), Vector3(0.0, 0.5, 3.0), true)
-	foe_top = _spawn_top(false)
-	foe_gauge.ring_color = foe_top.accent_color
-	var opp: Dictionary = _current_opponent()
-	ai_tier = _ai_tier()
-	# floor rises with tier (masters stop fumbling); cap 95 — rolls past 95 hit the
-	# cord-snap penalty (eff 0.15), which made high-dev masters throw 1 in 5 launches
-	var wind_floor: float = 40.0 + 35.0 * minf(ai_tier, 1.0) # knob
-	var foe_wind: float = clampf(_rng.randfn(opp.wind_mean, opp.wind_dev), wind_floor, 95.0)
-	var foe_eff: float = _wind_effectiveness(foe_wind)
-	var foe_dir: Vector3 = Vector3.BACK.rotated(Vector3.UP, _rng.randf_range(-0.25, 0.25))
-	foe_top.launch(foe_dir, foe_eff)
-	last_striker = ""
-	hit_cooldown = 0.0
-	nudge_cooldown = 0.0
-	ai_think_timer = 1.2
-	ai_dodge_cd = 0.0
-	_enter_state(State.BATTLE)
 
 
-# ---------------------------------------------------------------- battle
 
-func _try_nudge(screen_pos: Vector2) -> void:
-	if nudge_cooldown > 0.0:
-		return
-	if not is_instance_valid(player_top) or not player_top.alive or player_top.spin <= NUDGE_SPIN_COST:
-		return
-	var origin: Vector3 = camera.project_ray_origin(screen_pos)
-	var normal: Vector3 = camera.project_ray_normal(screen_pos)
-	var hit: Variant = Plane(Vector3.UP, 0.0).intersects_ray(origin, normal)
-	if hit == null:
-		return
-	var point: Vector3 = hit
-	var dir: Vector3 = point - player_top.position
-	dir.y = 0.0
-	if dir.length() < 0.05:
-		return
-	dir = dir.normalized()
-	nudge_cooldown = NUDGE_COOLDOWN
-	_play_sfx(SND_NUDGE, -8.0, 0.2)
-	if net_active and not _net_is_host():
-		# optimistic FX only; the host validates and applies it to our top (its foe_top)
-		player_top.flash_direction(dir)
-		_flash_click_marker(point)
-		_net_request_nudge.rpc_id(1, Vector2(-point.x, -point.z))
-		return
-	player_top.velocity += dir * NUDGE_POWER
-	player_top.spin = maxf(player_top.spin - NUDGE_SPIN_COST, 0.0)
-	player_top.flash_direction(dir)
-	_flash_click_marker(point)
-	if net_active:
-		_net_nudge_fx.rpc(Vector2(dir.x, dir.z))
+
+
 
 
 func _flash_click_marker(point: Vector3) -> void:
@@ -1140,117 +1070,13 @@ func _flash_click_marker(point: Vector3) -> void:
 	_marker_tween.tween_callback(click_marker.hide)
 
 
-func _ai_tier() -> float:
-	# campaign: 0.1 (duel 1) .. 1.1 (duel 7); endless keeps climbing past the campaign cap
-	var t: float = clampf(0.2 + 0.12 * float(duel_index), 0.2, 1.3) if endless_mode \
-		else 0.1 + float(duel_index) / 6.0
-	if bool(_current_opponent().aggressive):
-		t += 0.15 # knob: aggressive masters fight a notch above their stage
-	return t
 
 
-func _ai_think(delta: float) -> void:
-	var skill: float = minf(ai_tier, 1.0) # aim/lead/power saturate; cadence keeps scaling via duel_index
-	var foe_flat: Vector2 = Vector2(foe_top.position.x, foe_top.position.z)
-	var foe_dist: float = foe_flat.length()
-	var out_dir: Vector3 = Vector3(foe_flat.x, 0.0, foe_flat.y) / maxf(foe_dist, 0.001)
-	var to_player: Vector3 = player_top.position - foe_top.position
-	to_player.y = 0.0
-	var sep: float = to_player.length()
-	# continuous drift (free): survive first, then hunt. Whiffed charges are the
-	# suicide vector (friction 0.8 can't stop a 4 m/s sail past RIM_CLIMB_SPEED 1.7),
-	# hence the speed cap and radial emergency brake.
-	if foe_dist > 2.7 and foe_top.velocity.dot(out_dir) > 1.2: # knob
-		foe_top.velocity += -out_dir * 2.6 * delta # emergency brake: never charge over the rim
-	elif foe_dist > 3.2:
-		foe_top.velocity += -out_dir * 1.8 * delta # recover footing
-	else:
-		var lead: Vector3 = player_top.position + player_top.velocity * (0.15 + 0.3 * skill) # knob
-		var lead_flat: Vector2 = Vector2(lead.x, lead.z)
-		if lead_flat.length() > 3.4:
-			lead_flat = lead_flat.normalized() * 3.4 # never chase a point in the rim band
-		var hunt: Vector3 = Vector3(lead_flat.x, 0.0, lead_flat.y) - foe_top.position
-		hunt.y = 0.0
-		if hunt.length() > 0.2 and foe_top.velocity.length() < 2.6: # knob speed cap
-			foe_top.velocity += hunt.normalized() * (1.3 + 1.5 * skill) * delta # knob
-	# reactive dodge (all tiers): sidestep an incoming charge the moment it's seen.
-	# Cooldown is consumed on detection whether the roll succeeds or not — a failed
-	# roll means the AI got caught flat, and a yo-yo-charging player can't bait
-	# dodges faster than the cooldown to drain the AI's spin.
-	ai_dodge_cd = maxf(ai_dodge_cd - delta, 0.0)
-	var charge_threat: bool = sep < 2.6 and player_top.velocity.length() > 1.6 \
-		and player_top.velocity.normalized().dot(-to_player / maxf(sep, 0.001)) > 0.6 # knob
-	if charge_threat and ai_dodge_cd <= 0.0 \
-			and foe_top.spin - NUDGE_SPIN_COST >= 0.10 * foe_top.launch_spin:
-		ai_dodge_cd = 1.5 - 0.9 * skill # knob: ready again in 0.6-1.5s
-		if _rng.randf() < 0.35 + 0.6 * skill: # knob: low tiers flinch late, high tiers read every charge
-			var perp: Vector3 = (to_player / maxf(sep, 0.001)).rotated(Vector3.UP, PI * 0.5)
-			var dodge: Vector3 = perp if perp.dot(-out_dir) >= 0.0 else -perp # lean inward, never rimward
-			foe_top.velocity += dodge * NUDGE_POWER * 1.15 # knob: enough to clear the combined radii
-			foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
-			foe_top.flash_direction(dodge)
-			ai_think_timer = minf(ai_think_timer, 0.25) # matador: counter-ram the exposed back
-	# paid pushes on the think timer — the AI plays by the player's push rules
-	ai_think_timer -= delta
-	if ai_think_timer > 0.0:
-		return
-	ai_think_timer = maxf(1.3 - 0.12 * float(duel_index), 0.45) + _rng.randf_range(-0.15, 0.25) # knob
-	# spin budget relative to launch_spin: wobble starts at 0.25x, topple at 0.08x —
-	# an absolute floor could push the AI into topple range on weak launches
-	var spin_after: float = foe_top.spin - NUDGE_SPIN_COST
-	if spin_after < 0.10 * foe_top.launch_spin:
-		return # hard floor: a push may never topple us
-	var conserving: bool = spin_after < 0.30 * foe_top.launch_spin # knob
-	var kill_shot: bool = player_top.wobble > foe_top.wobble + 0.1 # winning the wobble race
-	var player_dist: float = Vector2(player_top.position.x, player_top.position.z).length()
-	var push_dir: Vector3 = Vector3.ZERO
-	var power: float = NUDGE_POWER
-	if foe_dist > 3.0:
-		push_dir = -out_dir # paid center recovery
-	elif player_dist > 2.8 and foe_dist < 2.3 and sep < 1.8 and (not conserving or kill_shot):
-		push_dir = to_player # RIM KILL: shove them over — plain power, tight gates make whiffs rare
-	elif sep < 2.6 and (not conserving or kill_shot) \
-			and (foe_top.mass >= player_top.mass * 0.9 or kill_shot
-				or player_top.velocity.length() < 1.4): # knob
-		# matador rule: an out-massed top loses even trades (mass ratio doubles the
-		# damage against it), so it only rams a slow/parked or wobbling target and
-		# otherwise saves spin — dodging the heavy top's charges bleeds the charger
-		push_dir = player_top.position + player_top.velocity * (0.15 + 0.3 * skill) - foe_top.position
-		power = NUDGE_POWER * (1.0 + 0.2 * skill) # knob: capped 1.2x — more only raises self-ringout risk
-	push_dir.y = 0.0
-	if push_dir.length() < 0.05:
-		return # out of range: save the spin, keep drifting
-	# low tiers attack but miss — aim error shrinks to surgical as skill rises
-	push_dir = push_dir.normalized().rotated(Vector3.UP, _rng.randfn(0.0, 0.45 * (1.0 - skill))) # knob
-	foe_top.velocity += push_dir * power
-	foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
-	foe_top.flash_direction(push_dir)
 
 
-func _check_collision() -> void:
-	# ponytail: exactly two tops -> plain distance check is the overlap query
-	var diff: Vector3 = foe_top.position - player_top.position
-	diff.y = 0.0
-	var min_d: float = player_top.radius + foe_top.radius
-	if diff.length() >= min_d or hit_cooldown > 0.0:
-		return
-	hit_cooldown = 0.3
-	var dir: Vector3 = diff.normalized() if diff.length() > 0.001 else Vector3.FORWARD
-	# charging into the hit transfers momentum — a ram knocks far harder than a drift
-	var charge_p: float = maxf(player_top.velocity.dot(dir), 0.0)
-	var charge_f: float = maxf(-foe_top.velocity.dot(dir), 0.0)
-	var imp_on_foe: float = minf(0.02 * player_top.spin * (player_top.mass / foe_top.mass) + charge_p * 1.3 * (player_top.mass / foe_top.mass), MAX_IMPULSE)
-	var imp_on_player: float = minf(0.02 * foe_top.spin * (foe_top.mass / player_top.mass) + charge_f * 1.3 * (foe_top.mass / player_top.mass), MAX_IMPULSE)
-	foe_top.apply_hit(dir, imp_on_foe, imp_on_foe * 2.5)
-	player_top.apply_hit(-dir, imp_on_player, imp_on_player * 2.5)
-	var overlap: float = min_d - diff.length()
-	foe_top.position += dir * overlap * 0.5
-	player_top.position -= dir * overlap * 0.5
-	last_striker = "player" if imp_on_foe >= imp_on_player else "foe"
-	var contact: Vector3 = player_top.position + dir * player_top.radius
-	_hit_effects(contact, maxf(imp_on_foe, imp_on_player))
-	if net_active:
-		_net_hit_fx.rpc(Vector2(contact.x, contact.z), maxf(imp_on_foe, imp_on_player))
+
+
+
 
 
 func _hit_effects(contact: Vector3, strength: float) -> void:
@@ -1265,55 +1091,13 @@ func _hit_effects(contact: Vector3, strength: float) -> void:
 		_toast("PANGKAH!", Color(1.0, 0.55, 0.15), contact, true)
 
 
-func _update_gauges() -> void:
-	if is_instance_valid(player_top):
-		player_gauge.frac = player_top.spin / maxf(player_top.spin_reserve, 1.0)
-		player_gauge.wobbling = player_top.alive and player_top.wobble > 0.0
-	if is_instance_valid(foe_top):
-		foe_gauge.frac = foe_top.spin / maxf(foe_top.spin_reserve, 1.0)
-		foe_gauge.wobbling = foe_top.alive and foe_top.wobble > 0.0
 
 
-func _resolve_eliminations() -> void:
-	var p_reason: String = ""
-	var f_reason: String = ""
-	if is_instance_valid(player_top) and player_top.alive:
-		p_reason = player_top.pending_elimination
-	if is_instance_valid(foe_top) and foe_top.alive:
-		f_reason = foe_top.pending_elimination
-	if p_reason == "" and f_reason == "":
-		return
-	var player_wins: bool = false
-	if p_reason != "" and f_reason != "":
-		if absf(player_top.spin - foe_top.spin) < 0.0001:
-			player_wins = last_striker != "player"
-		else:
-			player_wins = player_top.spin > foe_top.spin
-	elif f_reason != "":
-		player_wins = true
-	else:
-		player_wins = false
-	if net_active:
-		# reasons are in host roles: player_top here IS the host's top
-		_net_round_over.rpc(p_reason, f_reason, player_wins)
-		return
-	_apply_round_result(p_reason, f_reason, player_wins)
 
 
-func _apply_round_result(my_reason: String, opp_reason: String, i_win: bool) -> void:
-	if my_reason != "" and opp_reason != "":
-		_toast(_t("toast_double"), TEXT_COLOR, Vector3.ZERO, false)
-		if is_instance_valid(player_top):
-			player_top.die(my_reason)
-		if is_instance_valid(foe_top):
-			foe_top.die(opp_reason)
-	elif opp_reason != "":
-		_toast_elimination(foe_top, opp_reason)
-		foe_top.die(opp_reason)
-	else:
-		_toast_elimination(player_top, my_reason)
-		player_top.die(my_reason)
-	_finish_duel(i_win)
+
+
+
 
 
 func _toast_elimination(top: Gasing, reason: String) -> void:
@@ -1332,38 +1116,6 @@ func _finish_duel(player_wins: bool) -> void:
 	player_gauge.wobbling = false
 	foe_gauge.wobbling = false
 	_reset_round_panel()
-	if net_active:
-		if player_wins:
-			net_my_wins += 1
-			_play_sfx(SND_WIN, -3.0, 0.02)
-			round_label.text = _t("round_win")
-			round_label.add_theme_color_override("font_color", PLAYER_COLOR)
-		else:
-			net_opp_wins += 1
-			_play_sfx(SND_LOSE, -3.0, 0.02)
-			round_label.text = _t("round_lose") % net_opp_name
-			round_label.add_theme_color_override("font_color", FOE_COLOR)
-		var match_over: bool = net_my_wins >= NET_MATCH_TARGET or net_opp_wins >= NET_MATCH_TARGET
-		if player_wins:
-			var counts: Dictionary = _grant_materials(_rng.randi_range(1, 2))
-			_tally_match_mats(counts)
-			_show_award_icons(round_award_row, counts, "+%d")
-			mats_saved_label.text = _t("mats_saved")
-			mats_saved_label.visible = true
-			if match_over:
-				var bonus: Dictionary = _grant_materials(1)
-				_tally_match_mats(bonus)
-				net_bonus_text = _t("win_bonus") % _mat_summary(bonus)
-			_save_workshop() # bank rewards NOW — a disconnect during the pause cannot void them
-		if not match_over and maxi(net_my_wins, net_opp_wins) == NET_MATCH_TARGET - 1:
-			match_point_label.text = _t("match_point")
-			match_point_label.visible = true
-			_pulse(match_point_label)
-		award_label.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
-		_update_top_bar()
-		_show_panel(round_panel)
-		get_tree().create_timer(2.4).timeout.connect(_net_after_round)
-		return
 	var opp: Dictionary = _current_opponent()
 	if player_wins:
 		_play_sfx(SND_WIN, -3.0, 0.02)
@@ -1489,7 +1241,6 @@ func _reset_over_panel() -> void:
 func _reset_run() -> void:
 	duel_index = 0
 	run_won = false
-	last_striker = ""
 
 
 func _current_opponent() -> Dictionary:
@@ -1532,7 +1283,34 @@ func _style_battle_stats(id: String) -> Dictionary:
 	var src: Dictionary = STYLE_DEFS[id] if net_active else player_shapes[id]
 	var s: Dictionary = {"mass": src.mass, "spin_reserve": src.spin_reserve, "balance": src.balance}
 	s["mesh"] = STYLE_DEFS[id].mesh
+	s["level"] = _style_level(id)
+	if not net_active:
+		var bonus: int = int(s.level) - 1
+		s.mass += 0.04 * bonus
+		s.spin_reserve += 4.0 * bonus
+		s.balance += bonus
 	return s
+
+
+func _style_level(id: String) -> int:
+	var xp: int = int(style_xp.get(id, 0))
+	for level: int in range(LEVEL_XP.size(), 0, -1):
+		if xp >= LEVEL_XP[level - 1]:
+			return level
+	return 1
+
+
+func _award_style_xp(styles: Array, won: bool) -> void:
+	var awarded: Array[String] = []
+	for value: Variant in styles:
+		if not value is String:
+			continue
+		var id: String = value
+		if not unlocked_styles.has(id) or awarded.has(id):
+			continue
+		awarded.append(id)
+		style_xp[id] = mini(int(style_xp.get(id, 0)) + (30 if won else 15), LEVEL_XP[-1])
+	_save_workshop()
 
 
 func _grant_materials(count: int) -> Dictionary:
@@ -1553,7 +1331,7 @@ func _mat_summary(counts: Dictionary) -> String:
 	return ", ".join(parts)
 
 
-func _load_workshop() -> void:
+func _load_workshop(source: ConfigFile = null) -> void:
 	# defaults first — a missing/corrupt save degrades to a fresh workshop
 	unlocked_styles = DEFAULT_STYLES.duplicate()
 	materials_owned = {"merbau": 0, "kemuning": 0, "besi": 0}
@@ -1562,12 +1340,18 @@ func _load_workshop() -> void:
 		var d: Dictionary = STYLE_DEFS[id]
 		player_shapes[id] = {"mass": d.mass, "spin_reserve": d.spin_reserve, "balance": d.balance}
 	selected_shape = "jantung"
+	loadout = ["jantung", "uri", "jantung"]
+	loadout_slot = 0
+	difficulty = 1
+	style_xp = {}
 	coins = 0
 	defeated_masters = []
 	style_accents = {}
 	endless_best = 0
-	var cf: ConfigFile = ConfigFile.new()
-	if cf.load(SAVE_PATH) != OK:
+	if source == null and (_test_mode or _netbot):
+		return
+	var cf: ConfigFile = source if source != null else ConfigFile.new()
+	if source == null and cf.load(SAVE_PATH) != OK:
 		return
 	var u: Variant = cf.get_value("workshop", "unlocked", [])
 	if u is Array:
@@ -1612,13 +1396,31 @@ func _load_workshop() -> void:
 	var eb: Variant = cf.get_value("workshop", "endless_best", 0)
 	if eb is int or eb is float:
 		endless_best = maxi(int(eb), 0)
+	# v3 keeps forged stats separate: level bonuses are derived, never saved into shapes.
+	var xp: Variant = cf.get_value("workshop", "style_xp", {})
+	if xp is Dictionary:
+		for id: String in STYLE_DEFS:
+			var value: Variant = xp.get(id, 0)
+			if (value is int or value is float) and is_finite(float(value)):
+				style_xp[id] = int(clampf(float(value), 0.0, float(LEVEL_XP[-1])))
+	var saved_difficulty: Variant = cf.get_value("workshop", "difficulty", 1)
+	if (saved_difficulty is int or saved_difficulty is float) and is_finite(float(saved_difficulty)):
+		difficulty = int(clampf(float(saved_difficulty), 0.0, 2.0))
+	loadout[0] = selected_shape # old saves keep their selected top in slot one
+	var saved_loadout: Variant = cf.get_value("workshop", "loadout", [])
+	if saved_loadout is Array:
+		for i: int in mini(saved_loadout.size(), 3):
+			var value: Variant = saved_loadout[i]
+			if value is String and unlocked_styles.has(value):
+				loadout[i] = value
+	selected_shape = loadout[0]
 
 
 func _save_workshop() -> void:
-	if _netbot:
+	if _netbot or _test_mode:
 		return # two local netbot instances share user:// — don't clobber the real save
 	var cf: ConfigFile = ConfigFile.new()
-	cf.set_value("workshop", "version", 2)
+	cf.set_value("workshop", "version", 3)
 	cf.set_value("workshop", "unlocked", unlocked_styles)
 	cf.set_value("workshop", "selected", selected_shape)
 	cf.set_value("workshop", "materials", materials_owned)
@@ -1627,6 +1429,9 @@ func _save_workshop() -> void:
 	cf.set_value("workshop", "defeated", defeated_masters)
 	cf.set_value("workshop", "accents", style_accents)
 	cf.set_value("workshop", "endless_best", endless_best)
+	cf.set_value("workshop", "style_xp", style_xp)
+	cf.set_value("workshop", "loadout", loadout)
+	cf.set_value("workshop", "difficulty", difficulty)
 	cf.save(SAVE_PATH) # ignore error; non-fatal
 
 
@@ -1638,17 +1443,15 @@ func _restart_run() -> void:
 func _on_restart_pressed() -> void:
 	if net_active:
 		if net_ended:
-			_net_teardown() # disconnect screen: the button is BACK TO MENU
+			_net_teardown()
 			return
 		if net_rematch_sent:
 			return
 		net_rematch_sent = true
 		restart_button.disabled = true
-		rematch_status.text = _t("rematch_wait") % net_opp_name
+		rematch_status.text = arena.tr_text("Waiting for all players", "Menunggu semua pemain")
 		rematch_status.visible = true
-		_pulse(rematch_status)
-		_net_rematch_ready.rpc()
-		_maybe_start_rematch()
+		arena.request_rematch()
 		return
 	_restart_run()
 
@@ -1667,14 +1470,7 @@ func _on_fight_pressed() -> void:
 		_on_shape_selected(viewed) # FIGHT doubles as BUY: reuse the gate/buy/need-coins flow
 		return
 	if net_active:
-		if net_ready_sent:
-			return
-		net_ready_sent = true
-		fight_button.disabled = true
-		craft_info.text = _t("waiting")
-		_net_craft_ready.rpc(_net_my_config())
-		if not net_opp_config.is_empty():
-			_enter_state(State.WIND)
+		arena.submit_loadout()
 		return
 	if endless_mode:
 		_apply_arena("kampung")
@@ -1722,6 +1518,7 @@ func _on_shape_selected(id: String) -> void:
 			coins -= price
 			unlocked_styles.append(id)
 			selected_shape = id
+			loadout[loadout_slot] = id
 			_play_sfx(SND_WIN, -6.0, 0.05)
 			craft_info.text = _t("bought") % String(STYLE_DEFS[id].label)
 			_save_workshop()
@@ -1732,10 +1529,29 @@ func _on_shape_selected(id: String) -> void:
 			craft_info.text = _t("need_coins") % [price, coins]
 		return
 	selected_shape = id
+	loadout[loadout_slot] = id
 	craft_info.text = _t("selected_info") % String(STYLE_DEFS[id].label)
 	_save_workshop()
 	_refresh_craft()
 	_update_workshop_preview()
+
+
+func _on_loadout_slot_pressed(slot: int) -> void:
+	if net_active and net_ready_sent:
+		return
+	loadout_slot = clampi(slot, 0, 2)
+	selected_shape = loadout[loadout_slot]
+	craft_index = STYLE_DEFS.keys().find(selected_shape)
+	craft_info.text = _t("pick_info")
+	_refresh_craft()
+	_update_workshop_preview()
+
+
+func _on_difficulty_selected(index: int) -> void:
+	if net_active:
+		return
+	difficulty = clampi(index, 0, 2)
+	_save_workshop()
 
 
 func _on_material_pressed(mat_id: String) -> void:
@@ -1777,15 +1593,11 @@ func _on_material_bought(mat_id: String) -> void:
 
 
 func _clear_tops() -> void:
-	if is_instance_valid(player_top):
-		player_top.queue_free()
-	if is_instance_valid(foe_top):
-		foe_top.queue_free()
+	if arena != null:
+		arena.clear_tops()
 	player_top = null
 	foe_top = null
 
-
-# ---------------------------------------------------------------- audio
 
 func _build_sfx_pool() -> void:
 	for i: int in 8:
@@ -1875,18 +1687,24 @@ func _show_panel(target: Control) -> void:
 
 
 func _update_top_bar() -> void:
-	score_row.visible = net_active
+	score_row.visible = net_active or not endless_mode
+	opp_pips.visible = net_active
 	if net_active:
 		duel_label.text = _t("vs_line") % net_opp_name
+		my_pips.set_total(3)
 		my_pips.wins = net_my_wins
 		opp_pips.wins = net_opp_wins
 		my_pips.queue_redraw()
 		opp_pips.queue_redraw()
 	else:
 		var opp: Dictionary = _current_opponent()
+		foe_gauge.title = String(opp.name) # fighting-game style: master's name at their bar
 		if endless_mode:
 			duel_label.text = _t("wave_line") % [duel_index + 1, opp.name]
 		else:
+			# campaign progress as fighting-game round pips: one diamond per master
+			my_pips.set_total(MASTERS.size())
+			my_pips.wins = mini(duel_index, MASTERS.size())
 			duel_label.text = _t("duel_line") % [mini(duel_index + 1, MASTERS.size()), MASTERS.size(), opp.name]
 	mats_label.text = _t("mats_line") % [coins, materials_owned.merbau, materials_owned.kemuning, materials_owned.besi]
 
@@ -2137,11 +1955,12 @@ func _build_ui() -> void:
 	top_bar.offset_left = 20.0
 	top_bar.offset_right = -20.0
 	top_bar.offset_top = 12.0
-	top_bar.offset_bottom = 170.0
+	top_bar.offset_bottom = 80.0
 	top_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.add_child(top_bar)
-	player_gauge = SpinGauge.new()
+	player_gauge = FightBar.new()
 	player_gauge.ring_color = PLAYER_COLOR
+	player_gauge.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	top_bar.add_child(player_gauge)
 	var spacer1: Control = Control.new()
 	spacer1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2149,7 +1968,7 @@ func _build_ui() -> void:
 	top_bar.add_child(spacer1)
 	var center_box: VBoxContainer = VBoxContainer.new()
 	center_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	duel_label = _mk_label("", 22, PLAYER_COLOR)
+	duel_label = _mk_label("", 16, PLAYER_COLOR)
 	mats_label = _mk_label("", 14)
 	center_box.add_child(duel_label)
 	score_row = HBoxContainer.new()
@@ -2171,8 +1990,10 @@ func _build_ui() -> void:
 	spacer2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spacer2.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top_bar.add_child(spacer2)
-	foe_gauge = SpinGauge.new()
+	foe_gauge = FightBar.new()
 	foe_gauge.ring_color = FOE_COLOR
+	foe_gauge.rtl = true
+	foe_gauge.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	top_bar.add_child(foe_gauge)
 
 	wind_meter = WindMeter.new()
@@ -2472,6 +2293,7 @@ func _on_host_steam_pressed() -> void:
 	wait_cancel_button.disabled = false
 	if err == Online.ErrorCodes.SUCCESS:
 		_set_wait_status(_t("waiting_opponent"), _t("share_code") % Online.lobby_code + "\n" + _t("invite_hint"), true)
+		arena.refresh_lobby()
 	else:
 		_show_menu_screen(MenuScreen.MP)
 		_show_menu_notice(_t("err_host_failed"))
@@ -2487,6 +2309,7 @@ func _on_host_lan_pressed() -> void:
 	if err == Online.ErrorCodes.SUCCESS:
 		_show_menu_screen(MenuScreen.WAIT)
 		_set_wait_status(_t("waiting_opponent"), _t("lan_share_ip") % _lan_display_ip(), false)
+		arena.refresh_lobby()
 	else:
 		_show_menu_notice(_t("err_host_failed"))
 
@@ -2548,6 +2371,7 @@ func _build_craft_panel() -> void:
 	header_wrap.offset_bottom = 124.0
 	craft_panel.add_child(header_wrap)
 	var header: PanelContainer = _mk_panel_box(true, 2.0)
+	craft_header = header
 	header_wrap.add_child(header)
 	var hv: VBoxContainer = VBoxContainer.new()
 	hv.add_theme_constant_override("separation", 2)
@@ -2559,6 +2383,26 @@ func _build_craft_panel() -> void:
 	craft_sub = _mk_label("", 13, CREAM_MUTED)
 	craft_sub.visible = false
 	hv.add_child(craft_sub)
+	var squad_row: HBoxContainer = HBoxContainer.new()
+	squad_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	squad_row.add_theme_constant_override("separation", 8)
+	hv.add_child(squad_row)
+	for slot: int in 3:
+		var slot_button: Button = _mk_button("", WOOD_DARK, true)
+		slot_button.name = "LoadoutSlot%d" % (slot + 1)
+		slot_button.add_theme_font_size_override("font_size", 13)
+		slot_button.toggle_mode = true
+		slot_button.pressed.connect(_on_loadout_slot_pressed.bind(slot))
+		squad_row.add_child(slot_button)
+		craft_loadout_buttons.append(slot_button)
+	craft_difficulty = OptionButton.new()
+	craft_difficulty.name = "DifficultyPicker"
+	craft_difficulty.focus_mode = Control.FOCUS_NONE
+	craft_difficulty.add_theme_font_size_override("font_size", 13)
+	for label: String in ["Normal", "Hard", "Master"]:
+		craft_difficulty.add_item(label)
+	craft_difficulty.item_selected.connect(_on_difficulty_selected)
+	squad_row.add_child(craft_difficulty)
 
 	craft_prev_button = _mk_button("<", WOOD_DARK, true)
 	craft_next_button = _mk_button(">", WOOD_DARK, true)
@@ -2580,8 +2424,9 @@ func _build_craft_panel() -> void:
 	craft_next_button.pressed.connect(_craft_cycle.bind(1))
 
 	# bottom sheet auto-heights from content: anchored to the bottom edge and
-	# grown upward, so it can never overflow the 720px viewport like the old grid
-	var sheet: PanelContainer = _mk_panel_box(true, 6.0)
+	# grown upward — kept to 4 dense rows so the spinning preview stays visible
+	var sheet: PanelContainer = _mk_panel_box(true, 2.0)
+	craft_sheet = sheet
 	sheet.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	sheet.offset_left = 80.0
 	sheet.offset_right = -80.0
@@ -2590,21 +2435,31 @@ func _build_craft_panel() -> void:
 	sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	craft_panel.add_child(sheet)
 	var v: VBoxContainer = VBoxContainer.new()
-	v.add_theme_constant_override("separation", 5)
+	v.add_theme_constant_override("separation", 4)
 	sheet.add_child(v)
 
+	# row 1: name + counter + status + coins, all inline
 	var name_row: HBoxContainer = HBoxContainer.new()
 	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	name_row.add_theme_constant_override("separation", 10)
 	v.add_child(name_row)
-	craft_name_label = _mk_title("", 22)
+	craft_name_label = _mk_title("", 20)
 	name_row.add_child(craft_name_label)
-	craft_counter_label = _mk_label("", 13, CREAM_MUTED)
+	craft_counter_label = _mk_label("", 12, CREAM_MUTED)
 	craft_counter_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	name_row.add_child(craft_counter_label)
-	craft_status_label = _mk_label("", 14)
-	v.add_child(craft_status_label)
+	craft_status_label = _mk_label("", 13)
+	craft_status_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_row.add_child(craft_status_label)
+	craft_level_label = _mk_label("", 13, PLAYER_COLOR)
+	craft_level_label.name = "StyleLevel"
+	craft_level_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_row.add_child(craft_level_label)
+	craft_mats_hint = _mk_label("", 13)
+	craft_mats_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_row.add_child(craft_mats_hint)
 
+	# row 2: stat bars + lacquer swatches
 	var stats_row: HBoxContainer = HBoxContainer.new()
 	stats_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	stats_row.add_theme_constant_override("separation", 24)
@@ -2615,28 +2470,29 @@ func _build_craft_panel() -> void:
 		_mk_stat_row(stats_row, Color(0.5, 0.85, 0.4), true),
 	]
 	for r: Dictionary in craft_stat_rows:
-		(r.bar as ProgressBar).custom_minimum_size = Vector2(130.0, 14.0)
+		(r.bar as ProgressBar).custom_minimum_size = Vector2(110.0, 14.0)
 
-	craft_mats_hint = _mk_label("", 14)
-	v.add_child(craft_mats_hint)
+	# row 3: forge row — [mat button | buy button] per material
 	var forge_box: HBoxContainer = HBoxContainer.new()
 	forge_box.alignment = BoxContainer.ALIGNMENT_CENTER
-	forge_box.add_theme_constant_override("separation", 20)
+	forge_box.add_theme_constant_override("separation", 16)
 	v.add_child(forge_box)
 	craft_forge_box = forge_box
 	for mat_id: String in MATERIAL_DEFS:
-		var mat_col: VBoxContainer = VBoxContainer.new()
-		mat_col.add_theme_constant_override("separation", 4)
+		var mat_col: HBoxContainer = HBoxContainer.new()
+		mat_col.add_theme_constant_override("separation", 6)
 		forge_box.add_child(mat_col)
 		var mb: Button = _mk_button("", WOOD_DARK, true)
 		mb.icon = load("res://assets/icon_%s.png" % mat_id)
-		mb.add_theme_constant_override("icon_max_width", 38)
+		mb.add_theme_constant_override("icon_max_width", 26)
 		mb.add_theme_constant_override("h_separation", 8)
+		mb.add_theme_font_size_override("font_size", 14)
 		mb.pressed.connect(_on_material_pressed.bind(mat_id))
 		mat_col.add_child(mb)
 		material_buttons[mat_id] = mb
 		var buy: Button = _mk_button("", WOOD_AMBER, true)
-		buy.add_theme_font_size_override("font_size", 12)
+		buy.add_theme_font_size_override("font_size", 11)
+		buy.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		buy.pressed.connect(_on_material_bought.bind(mat_id))
 		mat_col.add_child(buy)
 		material_buy_buttons[mat_id] = buy
@@ -2644,12 +2500,12 @@ func _build_craft_panel() -> void:
 	accent_row = HBoxContainer.new()
 	accent_row.add_theme_constant_override("separation", 8)
 	accent_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	forge_box.add_child(accent_row)
+	stats_row.add_child(accent_row)
 	accent_label = _mk_label("", 13)
 	accent_row.add_child(accent_label)
 	for c: Color in ACCENT_CHOICES:
 		var sw: Button = Button.new()
-		sw.custom_minimum_size = Vector2(26.0, 26.0)
+		sw.custom_minimum_size = Vector2(22.0, 22.0)
 		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER # don't stretch to the forge row's height
 		sw.focus_mode = Control.FOCUS_NONE
 		var sb: StyleBoxFlat = StyleBoxFlat.new()
@@ -2663,20 +2519,23 @@ func _build_craft_panel() -> void:
 		sw.pressed.connect(_on_accent_selected.bind(c))
 		accent_row.add_child(sw)
 
-	craft_info = _mk_label("", 14, Color(0.85, 0.8, 0.65))
-	v.add_child(craft_info)
-	craft_opp_status = _mk_label("", 14, FOE_COLOR)
+	craft_opp_status = _mk_label("", 13, FOE_COLOR)
 	craft_opp_status.visible = false
 	v.add_child(craft_opp_status)
+
+	# row 4: BACK — info (expands, centered) — FIGHT
+	craft_info = _mk_label("", 14, Color(0.85, 0.8, 0.65))
+	craft_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	craft_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	fight_button = _mk_button("", PLAYER_COLOR)
-	fight_button.add_theme_font_size_override("font_size", 22)
+	fight_button.add_theme_font_size_override("font_size", 20)
 	fight_button.pressed.connect(_on_fight_pressed)
 	craft_back_button = _mk_button("", WOOD_DARK, true)
 	craft_back_button.pressed.connect(_on_over_menu_pressed) # SP: reset run -> title; MP: leave lobby -> title
 	var btn_row: HBoxContainer = HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 16)
-	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	btn_row.add_child(craft_back_button)
+	btn_row.add_child(craft_info)
 	btn_row.add_child(fight_button)
 	v.add_child(btn_row)
 
@@ -2886,8 +2745,20 @@ func _build_over_panel() -> void:
 
 
 func _refresh_craft() -> void:
+	for slot: int in craft_loadout_buttons.size():
+		var button: Button = craft_loadout_buttons[slot]
+		button.text = "%d · %s" % [slot + 1, String(STYLE_DEFS[loadout[slot]].label).trim_prefix("Gasing ")]
+		button.set_pressed_no_signal(slot == loadout_slot)
+		button.modulate = Color.WHITE if slot == loadout_slot else Color(0.72, 0.72, 0.72)
+		button.tooltip_text = _t("loadout_tip")
+		button.disabled = net_active and net_ready_sent
+	craft_difficulty.visible = not net_active
+	craft_difficulty.tooltip_text = _t("difficulty_tip")
+	for index: int in 3:
+		craft_difficulty.set_item_text(index, _t(["difficulty_normal", "difficulty_hard", "difficulty_master"][index]))
+	craft_difficulty.select(difficulty)
 	if net_active:
-		craft_duel_label.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
+		craft_duel_label.text = "FFA · %d %s" % [arena.connected_ids().size(), arena.tr_text("players", "pemain")]
 	else:
 		var opp: Dictionary = _current_opponent()
 		if endless_mode:
@@ -2906,6 +2777,8 @@ func _refresh_craft() -> void:
 
 	craft_name_label.text = String(def.label)
 	craft_counter_label.text = "%d / %d" % [craft_index + 1, STYLE_DEFS.size()]
+	var level: int = _style_level(viewed)
+	craft_level_label.text = (_t("level_max") % level) if level == LEVEL_XP.size() else (_t("level_xp") % [level, int(style_xp.get(viewed, 0)), LEVEL_XP[level]])
 	if locked:
 		if net_active:
 			craft_status_label.text = _t("locked_mp")
@@ -2918,23 +2791,24 @@ func _refresh_craft() -> void:
 		craft_status_label.text = _t("role_" + viewed)
 		craft_status_label.add_theme_color_override("font_color", Color(0.78, 0.7, 0.56))
 
-	var stats: Dictionary = def if net_active else player_shapes[viewed] # MP shows base = what you fight with
-	_tween_bar(craft_stat_rows[0].bar, (stats.mass - 1.4) / 1.6)
-	_tween_bar(craft_stat_rows[1].bar, (stats.spin_reserve - 60.0) / 50.0)
-	_tween_bar(craft_stat_rows[2].bar, (stats.balance - 55.0) / 30.0)
-	_tween_bar(craft_stat_rows[0].over, (def.mass - 1.4) / 1.6)
-	_tween_bar(craft_stat_rows[1].over, (def.spin_reserve - 60.0) / 50.0)
-	_tween_bar(craft_stat_rows[2].over, (def.balance - 55.0) / 30.0)
+	var stats: Dictionary = _style_battle_stats(viewed) # includes SP levels; MP stays normalized
+	_tween_bar(craft_stat_rows[0].bar, (stats.mass - 1.4) / 2.0)
+	_tween_bar(craft_stat_rows[1].bar, (stats.spin_reserve - 60.0) / 70.0)
+	_tween_bar(craft_stat_rows[2].bar, (stats.balance - 55.0) / 35.0)
+	_tween_bar(craft_stat_rows[0].over, (def.mass - 1.4) / 2.0)
+	_tween_bar(craft_stat_rows[1].over, (def.spin_reserve - 60.0) / 70.0)
+	_tween_bar(craft_stat_rows[2].over, (def.balance - 55.0) / 35.0)
 
 	# forging/recoloring targets selected_shape, so hide the forge while browsing
 	# a locked style (selected_shape is some other top) and in MP (equal footing)
 	var forging: bool = not net_active and not locked
 	craft_forge_box.visible = forging
-	craft_mats_hint.visible = forging
-	craft_mats_hint.text = _t("mats_hint") + "  ·  %d duit" % coins
+	accent_row.visible = forging
+	craft_mats_hint.visible = not net_active
+	craft_mats_hint.text = "·  %d duit" % coins
 	for mat_id: String in MATERIAL_DEFS:
 		var mdef: Dictionary = MATERIAL_DEFS[mat_id]
-		material_buttons[mat_id].text = "%s ×%d\n%s" % [mdef.label, materials_owned.get(mat_id, 0), _t("desc_" + mat_id)]
+		material_buttons[mat_id].text = "%s ×%d" % [mdef.label, materials_owned.get(mat_id, 0)]
 		material_buy_buttons[mat_id].text = _t("mat_buy") % int(MAT_PRICES[mat_id])
 
 	# the confirm button doubles as the BUY button on a locked-but-buyable style
@@ -2948,310 +2822,42 @@ func _tween_bar(bar: ProgressBar, value: float) -> void:
 	tw.tween_property(bar, "value", clampf(value, 0.0, 1.0), 0.35).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 
-# ---------------------------------------------------------------- multiplayer
-# Wire convention: every vector on the wire is in HOST frame. The client negates
-# x/z at its boundary (applying snapshots/FX, sending its nudge point). Aim angles
-# cross unchanged: FORWARD.rotated(UP, a) mirrored through the origin equals
-# BACK.rotated(UP, a). Own top is always gold at z=+3, opponent teal at z=-3;
-# PlayerData.color is deliberately ignored for the tops.
-
-func _net_is_host() -> bool:
-	return multiplayer.is_server()
-
-
-func _net_sim_authority() -> bool:
-	return not net_active or multiplayer.is_server()
-
-
-func _net_my_config() -> Dictionary:
-	# MP is equal-footing: send base stats, matching _style_battle_stats (else the peers desync).
-	var base: Dictionary = STYLE_DEFS[selected_shape]
-	return {
-		"name": Online.personal_player_data.display_name,
-		"shape": selected_shape,
-		"stats": {"mass": base.mass, "spin_reserve": base.spin_reserve, "balance": base.balance},
-	}
-
-
-func _net_setup() -> void:
-	net_active = true
-	endless_mode = false
-	net_ended = false
-	net_opp_config = {}
-	net_ready_sent = false
-	net_wind_sent = false
-	net_opp_wind_in = false
-	net_my_wins = 0
-	net_opp_wins = 0
-	net_client_nudge_cd = 0.0
-	net_rematch_sent = false
-	net_opp_rematch = false
-	net_bonus_text = ""
-	net_match_mats = {}
-	net_opp_name = ""
-	for pd: PlayerData in Online.players.values():
-		if pd.multiplayer_id != multiplayer.get_unique_id():
-			net_opp_name = pd.display_name
-			break # first non-self entry (host sorts first); ignore any stale duplicates
-	_reset_run()
-	# MP fights with the persistent workshop build + materials, same as SP
-	foe_gauge.title = net_opp_name
-	foe_gauge.ring_color = FOE_COLOR
-
-
-@rpc("authority", "reliable", "call_local")
-func _net_start_match() -> void:
-	_net_setup()
-	_enter_state(State.CRAFT)
-
-
-func _net_sanitize_config(cfg: Dictionary) -> Dictionary:
-	# The host simulates everything (clients are puppets), so clamping here is the
-	# entire anti-cheat boundary: a modded client can at worst field a maximally
-	# forged LEGAL build. Both peers sanitize for display consistency.
-	var style: String = String(cfg.get("shape", "jantung"))
-	if not STYLE_DEFS.has(style):
-		style = "jantung"
-	var def: Dictionary = STYLE_DEFS[style]
-	var raw: Variant = cfg.get("stats")
-	var in_stats: Dictionary = raw if raw is Dictionary else {}
-	var mass_v: Variant = in_stats.get("mass", def.mass)
-	var bal_v: Variant = in_stats.get("balance", def.balance)
-	return {
-		"name": String(cfg.get("name", net_opp_name)),
-		"shape": style,
-		"stats": {
-			"mass": clampf(float(mass_v) if (mass_v is float or mass_v is int) else float(def.mass), 1.4, 3.0),
-			"balance": clampf(float(bal_v) if (bal_v is float or bal_v is int) else float(def.balance), 55.0, 85.0),
-			"spin_reserve": def.spin_reserve, # not forgeable — always the style base
-			"mesh": def.mesh, # derived, never client-supplied
-		},
-	}
-
-
-@rpc("any_peer", "reliable")
-func _net_craft_ready(cfg: Dictionary) -> void:
-	net_opp_config = _net_sanitize_config(cfg)
-	if state == State.CRAFT and not net_ready_sent:
-		craft_opp_status.text = _t("opp_ready") % net_opp_name
-	if net_ready_sent and state == State.CRAFT:
-		_enter_state(State.WIND)
-
-
-func _net_release_wind() -> void:
-	net_wind_sent = true
-	net_my_wind = Vector2(wind_power, aim_angle)
-	wind_meter.visible = false
-	aim_arrow.visible = false
-	if is_instance_valid(player_top):
-		player_top.set_winding(false)
-	wind_hint.text = _t("waiting")
-	if wind_power > 95.0:
-		_toast(_t("toast_snap"), Color(1.0, 0.35, 0.25), Vector3(0.0, 0.5, 3.0), true)
-	_net_wind_done.rpc(net_my_wind.x, net_my_wind.y)
-	if net_opp_wind_in:
-		_mp_do_launch(net_my_wind.x, net_my_wind.y, net_opp_wind.x, net_opp_wind.y)
-
-
-@rpc("any_peer", "reliable")
-func _net_wind_done(power: float, angle: float) -> void:
-	net_opp_wind = Vector2(power, angle)
-	net_opp_wind_in = true
-	if net_wind_sent and state == State.WIND:
-		_mp_do_launch(net_my_wind.x, net_my_wind.y, power, angle)
-
-
-func _mp_do_launch(my_power: float, my_angle: float, opp_power: float, opp_angle: float) -> void:
-	# Deterministic on both peers: pure function of the two (power, angle) pairs.
-	# Never add RNG here — the peers must converge without a host round-trip.
-	if state != State.WIND:
-		return
-	wind_meter.visible = false
-	wind_hint.visible = false
-	aim_arrow.visible = false
-	last_wind_effectiveness = _wind_effectiveness(my_power)
-	player_top.set_winding(false)
-	player_top.launch(Vector3.FORWARD.rotated(Vector3.UP, my_angle), last_wind_effectiveness)
-	_play_sfx(SND_LAUNCH, -4.0, 0.15)
-	foe_top = _spawn_top(false)
-	foe_gauge.ring_color = foe_top.accent_color
-	foe_top.launch(Vector3.BACK.rotated(Vector3.UP, opp_angle), _wind_effectiveness(opp_power))
-	if opp_power > 95.0:
-		_toast(_t("toast_snap"), Color(1.0, 0.35, 0.25), Vector3(0.0, 0.5, -3.0), true)
-	last_striker = ""
-	hit_cooldown = 0.0
-	nudge_cooldown = 0.0
-	net_client_nudge_cd = 0.0
-	_enter_state(State.BATTLE)
-
-
-@rpc("authority", "unreliable_ordered")
-func _net_snapshot(hp: Vector2, hspin: float, hwob: float, cp: Vector2, cspin: float, cwob: float) -> void:
-	if state != State.BATTLE:
-		return # late packets after round end
-	if is_instance_valid(foe_top) and foe_top.alive:
-		foe_top.position.x = -hp.x
-		foe_top.position.z = -hp.y
-		foe_top.spin = hspin
-		foe_top.wobble = hwob
-	if is_instance_valid(player_top) and player_top.alive:
-		player_top.position.x = -cp.x
-		player_top.position.z = -cp.y
-		player_top.spin = cspin
-		player_top.wobble = cwob
-
-
-@rpc("any_peer", "reliable")
-func _net_request_nudge(point: Vector2) -> void:
-	# point is already in HOST frame (the client negated it)
-	if not _net_is_host() or state != State.BATTLE:
-		return
-	if net_client_nudge_cd > 0.0:
-		return
-	if not is_instance_valid(foe_top) or not foe_top.alive or foe_top.spin <= NUDGE_SPIN_COST:
-		return
-	var dir: Vector3 = Vector3(point.x, 0.0, point.y) - foe_top.position
-	dir.y = 0.0
-	if dir.length() < 0.05:
-		return
-	dir = dir.normalized()
-	# shorter than the client's own 0.35s gate: arrival-time jitter must not eat pushes
-	# the client already rate-limited (and showed optimistic FX for) at send time
-	net_client_nudge_cd = NUDGE_COOLDOWN * 0.8
-	foe_top.velocity += dir * NUDGE_POWER
-	foe_top.spin = maxf(foe_top.spin - NUDGE_SPIN_COST, 0.0)
-	foe_top.flash_direction(dir)
-
-
-@rpc("authority", "reliable")
-func _net_hit_fx(contact: Vector2, strength: float) -> void:
-	_hit_effects(Vector3(-contact.x, 0.0, -contact.y), strength)
-	if is_instance_valid(player_top):
-		player_top.flash_accent()
-	if is_instance_valid(foe_top):
-		foe_top.flash_accent()
-
-
-@rpc("authority", "reliable")
-func _net_nudge_fx(dir: Vector2) -> void:
-	if is_instance_valid(foe_top):
-		foe_top.flash_direction(Vector3(-dir.x, 0.0, -dir.y))
-	_play_sfx(SND_NUDGE, -8.0, 0.2)
-
-
-@rpc("authority", "reliable", "call_local")
-func _net_round_over(host_reason: String, cli_reason: String, host_wins: bool) -> void:
-	if state != State.BATTLE:
-		return
-	var i_win: bool = host_wins if _net_is_host() else not host_wins
-	var my_reason: String = host_reason if _net_is_host() else cli_reason
-	var opp_reason: String = cli_reason if _net_is_host() else host_reason
-	_apply_round_result(my_reason, opp_reason, i_win)
-
-
-func _net_after_round() -> void:
-	if not net_active or net_ended or state != State.ROUND_OVER:
-		return
-	if net_my_wins >= NET_MATCH_TARGET or net_opp_wins >= NET_MATCH_TARGET:
-		# win counters are mirrored on both peers (reliable call_local round RPC),
-		# so the match end is deterministic locally — no extra RPC needed
-		_net_finish_match()
-	elif _net_is_host():
-		_net_next_round.rpc()
-
-
-func _net_finish_match() -> void:
-	var i_won: bool = net_my_wins >= NET_MATCH_TARGET
-	if _netbot:
-		print("netbot: match over %d-%d vs %s" % [net_my_wins, net_opp_wins, net_opp_name])
-	_play_sfx(SND_WIN if i_won else SND_LOSE, 0.0, 0.0)
-	_reset_over_panel()
-	over_title.text = _t("match_win") if i_won else _t("match_lose") % net_opp_name
-	over_title.add_theme_color_override("font_color", PLAYER_COLOR if i_won else DANGER)
-	over_stats.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
-	if not net_match_mats.is_empty():
-		over_mats_title.text = _t("match_mats")
-		over_mats_title.visible = true
-		over_award_row.visible = true
-		_show_award_icons(over_award_row, net_match_mats, "×%d")
-	if i_won and not net_bonus_text.is_empty():
-		over_bonus_label.text = net_bonus_text
-		over_bonus_label.visible = true
-	restart_button.text = _t("rematch")
-	_enter_state(State.OVER)
-
-
-@rpc("any_peer", "reliable")
-func _net_rematch_ready() -> void:
-	net_opp_rematch = true
-	if not net_rematch_sent and state == State.OVER:
-		rematch_status.text = _t("rematch_offer") % net_opp_name
-		rematch_status.visible = true
-		_pulse(rematch_status)
-	_maybe_start_rematch()
-
-
-func _maybe_start_rematch() -> void:
-	if _net_is_host() and net_rematch_sent and net_opp_rematch:
-		_net_start_match.rpc() # _net_setup zeroes wins/flags -> CRAFT
-
-
-@rpc("authority", "reliable", "call_local")
-func _net_next_round() -> void:
-	if state != State.ROUND_OVER:
-		return
-	_enter_state(State.CRAFT)
-
-
+# ---------------------------------------------------------------- multiplayer presentation
 func _net_teardown() -> void:
-	net_ended = true # swallow our own player_disconnected echo during leave_lobby
-	Online.leave_lobby() # idempotent
+	net_ended = true
+	Online.leave_lobby()
+	arena.reset()
+	net_active = false
 	net_ended = false
-	net_opp_config = {}
 	net_ready_sent = false
-	net_wind_sent = false
-	net_opp_wind_in = false
+	net_rematch_sent = false
 	net_my_wins = 0
 	net_opp_wins = 0
-	net_rematch_sent = false
-	net_opp_rematch = false
-	net_bonus_text = ""
-	net_match_mats = {}
-	net_opp_name = ""
-	net_active = false
 	_reset_run()
-	_apply_language() # restores restart_button / foe_gauge texts
+	_apply_language()
 	_enter_state(State.READY)
 
 
 func _on_mp_joined_lobby() -> void:
-	if Online.is_host:
-		return # host UI is driven by its own button handlers
-	if state != State.READY:
-		_reset_run() # abort the SP run for real — stale duel progress must not resume later (workshop persists)
-		_enter_state(State.READY) # Steam invite accepted mid-run aborts the run
-	_show_menu_screen(MenuScreen.WAIT)
-	_set_wait_status(_t("connecting"), "", false)
+	if not Online.is_host:
+		if state != State.READY:
+			_reset_run()
+			_enter_state(State.READY)
+		_show_menu_screen(MenuScreen.WAIT)
+		_set_wait_status(_t("connecting"), "", false)
+	arena.refresh_lobby()
 
 
 func _on_mp_player_connected(_pd: PlayerData) -> void:
-	if state != State.READY:
-		return
-	if Online.players.size() < 2:
-		return # self-registration echo — keep waiting
-	_set_wait_status(_t("opponent_found"), "", false)
-	if Online.is_host:
-		_net_start_match.rpc()
+	arena.refresh_lobby()
 
 
 func _on_mp_player_disconnected(pd: PlayerData) -> void:
-	if pd == Online.personal_player_data:
-		# our own leave echo: a teardown we started is already handling it, unless an
-		# external flow (e.g. accepting a Steam invite mid-match) pulled us out
-		if net_active and not net_ended:
-			_net_teardown()
+	if net_ended:
 		return
-	_handle_mp_loss(_t("mp_disconnected"))
+	if pd.multiplayer_id == multiplayer.get_unique_id():
+		return
+	arena.peer_left(pd.multiplayer_id)
 
 
 func _on_mp_server_disconnected() -> void:
@@ -3265,19 +2871,13 @@ func _on_mp_connection_failed() -> void:
 
 
 func _on_mp_steam_join_response(code: int) -> void:
-	# invite-accept failures (lobby full) otherwise produce zero feedback
-	if code == Online.ErrorCodes.SUCCESS:
+	if code == Online.ErrorCodes.SUCCESS or Online.is_host or Online.is_busy:
 		return
-	if Online.is_host or Online.is_busy:
-		return # hosting: entering our own lobby echoes as JOIN_FAILED_SAME_OWNER_ID — not a join failure
 	if state == State.READY:
-		if menu_screen == MenuScreen.WAIT:
-			_show_menu_screen(MenuScreen.MP)
+		_show_menu_screen(MenuScreen.MP)
 		_show_menu_notice(_t("err_join_steam"))
 
 
-# debug: headless-ish autopilot so a second local instance can play a LAN duel
-# unattended (`godot --path . -- netbot-host` / `-- netbot-join`). Inert otherwise.
 func _netbot_init() -> void:
 	var args: PackedStringArray = OS.get_cmdline_user_args()
 	if "netbot-host" in args:
@@ -3288,45 +2888,72 @@ func _netbot_init() -> void:
 		_on_join_lan_pressed.call_deferred()
 
 
-func _netbot_tick(delta: float) -> void:
-	_netbot_cd -= delta
-	if _netbot_cd > 0.0:
-		return
-	_netbot_cd = 0.8
-	if not net_active:
-		return
-	match state:
-		State.CRAFT:
-			if not net_ready_sent:
-				_on_fight_pressed()
-		State.WIND:
-			if net_wind_sent:
-				return
-			if not winding:
-				winding = true # charge through the real path: _physics_process ramps wind_power
-			elif wind_power >= 55.0:
-				winding = false
-				_net_release_wind()
-		State.OVER:
-			if not net_ended and not net_rematch_sent:
-				_on_restart_pressed() # auto-rematch so soak tests loop; disconnect screen is left alone
-
-
 func _handle_mp_loss(msg: String) -> void:
 	if state == State.READY:
 		Online.leave_lobby()
-		if menu_screen == MenuScreen.WAIT:
-			_show_menu_screen(MenuScreen.MP)
+		_show_menu_screen(MenuScreen.MP)
 		_show_menu_notice(msg)
 	elif net_active and not net_ended:
-		net_ended = true # keep net_active true so no SP branch (AI) wakes up mid-teardown
+		net_ended = true
 		Online.leave_lobby()
-		_reset_over_panel() # clears any rematch-wait state; banked rewards are already saved
-		over_title.text = _t("opp_left")
+		_reset_over_panel()
+		over_title.text = msg
 		over_title.add_theme_color_override("font_color", DANGER)
-		over_stats.text = _t("score_line") % [net_my_wins, net_opp_wins, net_opp_name]
+		over_stats.text = arena.scoreboard()
 		restart_button.text = _t("back_menu")
 		_enter_state(State.OVER)
+
+
+func _arena_round_finished(winner: int) -> void:
+	if not net_active and winner != 0:
+		_finish_duel(winner == 1)
+		return
+	state = State.ROUND_OVER
+	battle_hint.visible = false
+	_reset_round_panel()
+	var won: bool = winner == arena.my_id()
+	var who: String = str(arena.roster.get(winner, ""))
+	round_label.text = arena.tr_text("DRAW", "SERI") if winner == 0 else (_t("round_win") if won else _t("round_lose") % who)
+	round_label.add_theme_color_override("font_color", PLAYER_COLOR if won else FOE_COLOR)
+	_play_sfx(SND_WIN if won else SND_LOSE, -3.0, 0.02)
+	if net_active:
+		award_label.text = arena.scoreboard()
+		if won:
+			var counts: Dictionary = _grant_materials(_rng.randi_range(1, 2))
+			_tally_match_mats(counts)
+			_show_award_icons(round_award_row, counts, "+%d")
+			mats_saved_label.text = _t("mats_saved")
+			mats_saved_label.visible = true
+			_save_workshop()
+		get_tree().create_timer(2.4).timeout.connect(arena.after_round)
+	else:
+		get_tree().create_timer(2.4).timeout.connect(_retry_draw)
+	_show_panel(round_panel)
+
+
+func _retry_draw() -> void:
+	if state == State.ROUND_OVER and not net_active:
+		_enter_state(State.CRAFT)
+
+
+func _arena_match_finished(winner: int) -> void:
+	var won: bool = winner == arena.my_id()
+	_reset_over_panel()
+	over_title.text = _t("match_win") if won else _t("match_lose") % str(arena.roster.get(winner, "Player"))
+	over_title.add_theme_color_override("font_color", PLAYER_COLOR if won else DANGER)
+	over_stats.text = arena.scoreboard()
+	if won:
+		_tally_match_mats(_grant_materials(1))
+		_save_workshop()
+	if not net_match_mats.is_empty():
+		over_mats_title.text = _t("match_mats")
+		over_mats_title.visible = true
+		over_award_row.visible = true
+		_show_award_icons(over_award_row, net_match_mats, "×%d")
+	net_rematch_sent = false
+	restart_button.text = _t("rematch")
+	restart_button.disabled = arena.connected_ids().size() < 2
+	_enter_state(State.OVER)
 
 
 # ---------------------------------------------------------------- widgets
@@ -3342,6 +2969,11 @@ class ScorePips:
 	func _ready() -> void:
 		custom_minimum_size = Vector2(total * 22.0, 18.0)
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_total(n: int) -> void:
+		total = n
+		custom_minimum_size = Vector2(total * 22.0, 18.0)
+		queue_redraw()
 
 	func _draw() -> void:
 		# belah-ketupat diamonds (songket motif), filled vs hollow
@@ -3359,48 +2991,74 @@ class ScorePips:
 				draw_polyline(outline, Color(1.0, 1.0, 1.0, 0.25), 2.0, true)
 
 
-class SpinGauge:
+class FightBar:
 	extends Control
+	# fighting-game spin bar: a slanted bar anchored at the outer screen edge that
+	# drains toward center; `shown` lags behind `frac` so chunk hits leave a red
+	# damage trail that melts away (frac is the live fill, drawn over the trail)
+
+	const BAR_H: float = 30.0
+	const SKEW: float = 14.0
 
 	var frac: float = 1.0
 	var shown: float = 1.0
 	var ring_color: Color = Color.WHITE
 	var title: String = ""
 	var wobbling: bool = false
+	var rtl: bool = false # foe bar: mirrored so both bars drain toward the center
 	var _flash: float = 0.0
 
 	func _ready() -> void:
-		custom_minimum_size = Vector2(110.0, 134.0)
+		custom_minimum_size = Vector2(450.0, 52.0)
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	func _process(delta: float) -> void:
-		shown = lerpf(shown, frac, minf(8.0 * delta, 1.0))
+		shown = lerpf(shown, frac, minf(3.0 * delta, 1.0))
 		if wobbling:
 			_flash = wrapf(_flash + delta * 7.0, 0.0, TAU)
 		queue_redraw()
 
+	func _cut(t: float) -> PackedVector2Array:
+		# slanted cut line at fraction t (0 = outer edge, 1 = center end)
+		var xt: float = lerpf(SKEW, size.x, t)
+		var xb: float = lerpf(0.0, size.x - SKEW, t)
+		if rtl:
+			xt = size.x - xt
+			xb = size.x - xb
+		return PackedVector2Array([Vector2(xt, 0.0), Vector2(xb, BAR_H)])
+
+	func _quad(t0: float, t1: float) -> PackedVector2Array:
+		var a: PackedVector2Array = _cut(t0)
+		var b: PackedVector2Array = _cut(t1)
+		return PackedVector2Array([a[0], b[0], b[1], a[1]])
+
 	func _draw() -> void:
-		var c: Vector2 = Vector2(size.x / 2.0, size.x / 2.0)
-		var r: float = size.x / 2.0 - 10.0
-		# carved groove track with rims + gold compass notches (ukiran ring)
-		draw_arc(c, r, 0.0, TAU, 48, Color(0.16, 0.09, 0.05, 0.85), 10.0, true)
-		draw_arc(c, r + 5.5, 0.0, TAU, 48, Color(0.55, 0.38, 0.16, 0.55), 1.5, true)
-		draw_arc(c, r - 5.5, 0.0, TAU, 48, Color(0.55, 0.38, 0.16, 0.55), 1.5, true)
-		for i: int in 8:
-			var a: float = -PI / 2.0 + float(i) * TAU / 8.0
-			var dir: Vector2 = Vector2(cos(a), sin(a))
-			draw_line(c + dir * (r - 4.0), c + dir * (r + 4.0), Color(1.0, 0.78, 0.25, 0.45), 2.0, true)
+		draw_colored_polygon(_quad(0.0, 1.0), Color(0.16, 0.09, 0.05, 0.88))
+		var f0: float = clampf(frac, 0.0, 1.0)
+		var s0: float = clampf(shown, 0.0, 1.0)
+		if s0 > f0 + 0.003:
+			draw_colored_polygon(_quad(f0, s0), Color(0.95, 0.3, 0.15, 0.9))
 		var col: Color = ring_color
 		if wobbling:
 			col = ring_color.lerp(Color(1.0, 0.3, 0.2), 0.5 + 0.5 * sin(_flash))
-		if shown > 0.004:
-			var a1: float = -PI / 2.0 + TAU * clampf(shown, 0.0, 1.0)
-			draw_arc(c, r, -PI / 2.0, a1, 48, col, 7.0, true)
-			draw_circle(c + Vector2(0.0, -r), 3.5, col)
-			draw_circle(c + Vector2(cos(a1), sin(a1)) * r, 3.5, col)
+		if f0 > 0.003:
+			var q: PackedVector2Array = _quad(0.0, f0)
+			draw_colored_polygon(q, col)
+			draw_colored_polygon(PackedVector2Array([
+				q[0], q[1], q[1].lerp(q[2], 0.4), q[0].lerp(q[3], 0.4)]), col.lightened(0.22))
+		var frame: PackedVector2Array = _quad(0.0, 1.0)
+		frame.append(frame[0])
+		draw_polyline(frame, Color(1.0, 0.78, 0.25, 0.75), 2.0, true)
+		for i: int in [1, 2, 3]:
+			var c: PackedVector2Array = _cut(float(i) / 4.0)
+			draw_line(c[0], c[0].lerp(c[1], 0.18), Color(1.0, 0.78, 0.25, 0.4), 2.0, true)
 		var f: Font = get_theme_default_font()
-		draw_string(f, Vector2(0.0, c.y + 7.0), str(int(round(shown * 100.0))), HORIZONTAL_ALIGNMENT_CENTER, size.x, 20, col)
-		draw_string(f, Vector2(0.0, size.x + 18.0), title, HORIZONTAL_ALIGNMENT_CENTER, size.x, 14, Color(0.96, 0.9, 0.78))
+		var pct: String = str(int(round(f0 * 100.0)))
+		var txt: String = (pct + "  " + title) if rtl else (title + "  " + pct)
+		var align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_RIGHT if rtl else HORIZONTAL_ALIGNMENT_LEFT
+		var y: float = BAR_H + 17.0
+		draw_string(f, Vector2(1.0, y + 1.0), txt, align, size.x, 15, Color(0.0, 0.0, 0.0, 0.6))
+		draw_string(f, Vector2(0.0, y), txt, align, size.x, 15, Color(0.96, 0.9, 0.78))
 
 
 class WindMeter:

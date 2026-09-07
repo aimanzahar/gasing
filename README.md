@@ -1,72 +1,51 @@
-# What is it?
- This is a Godot project template for hosting and joining multiplayer games using Steam or local connection.
+# Gasing Pangkah
 
-#  Installation
-1. Download the repository files. If they are compressed (for example, `.zip` or `.rar`), make sure to extract the folder inside.
-2. Open Godot, and inside the projects list press **Import** and select the project folder
+Godot 4.7 arena battler with a Malaysian gasing workshop, campaign, endless mode and 2–4 player LAN/Steam FFA. Open `project.godot` in the GodotSteam-enabled Godot build used by this project and run `main.tscn`.
 
-# Usage
+## Play
 
-### Steam
-*`Make sure you open the Steam app before running the game!`*
-* **Hosting**: To Host a Steam lobby simply press "Host Online", you can then invite friends using the Steam app or inside the game by pressing "Esc" (where you can also see the lobby ID)
+Choose three owned gasing in the workshop; repeated styles are allowed. Drag the preview to inspect, scroll to zoom and double-click to reset. Choose Normal, Hard (default) or Master for solo play.
 
-* **Joining**: To join you can either accept a Steam invite from the host or type the lobby ID in the menu and pressing "Join"
+| Input | Action |
+| --- | --- |
+| WASD / arrows | Steer the selected gasing |
+| Left click | Free directional push |
+| 1 / 2 / 3 or squad card | Select a live gasing or reserve slot |
+| Shift | Dash: 20 energy, 1-second cooldown |
+| Hold E | Rush toward the mouse: 20 energy/second; enemy contact drains spin |
+| Space | Jump: 25 energy, 2.5-second cooldown |
+| Hold/release Space with a reserve selected | Charge and launch that reserve |
+| A / D while charging | Aim the launch |
+| Esc while charging | Cancel charge |
 
-### Local Network
-The default local IP is `127.0.0.1` and the default port is `8080` (You can change those at `Online.gd` file if needed)
+Opening charge also accepts the left mouse button. Release in the gold zone for more spin and energy; going past 95 breaks the cord. Energy never refills. Unselected gasing keep their momentum and spin without automatic attacks.
 
-* **Hosting**: Simply press "Host Local" in the menu. 
+Reserve slots auto-launch with weak charge at 30 and 45 seconds. If no gasing remains spinning, you have five seconds to launch a reserve before an automatic launch. The arena keeps running while you charge. The last surviving owner wins; at 90 seconds, living gasing count wins, then combined remaining spin percentage. This is a round limit; attacks and ringouts can end a round earlier. Exact ties draw. Multiplayer plays to three round wins.
 
-* **Joining**: Type the IP address in the menu and then press "Join". If none is provided, it tries to connect to the default local IP.
+## Workshop progression
 
-# Previews
+Each unique deployed, owned style gains 30 XP for a round win or 15 for a loss/draw. Levels 1–5 use cumulative XP thresholds 0, 100, 250, 450 and 700. Each level above one adds 4 spin reserve, 1 balance and 0.04 mass in solo play, plus a metallic band and polished finish. Multiplayer uses each style's base stats with cosmetic levels.
 
-![Main Menu](https://raw.githubusercontent.com/ViMayer/Godot-Steam-Local-Multiplayer-Lobby-Template/refs/heads/main/screenshots/main_menu.png)
-![In-game Lobby UI](https://raw.githubusercontent.com/ViMayer/Godot-Steam-Local-Multiplayer-Lobby-Template/refs/heads/main/screenshots/in_game_ui.png)
-![First-person Looking At Friend](https://raw.githubusercontent.com/ViMayer/Godot-Steam-Local-Multiplayer-Lobby-Template/refs/heads/main/screenshots/with_other_player.png)
+`user://workshop.cfg` automatically migrates older saves, preserving materials, money, unlocks, forging, colors and endless records. Test mode and netbots never read or write the real workshop save.
 
-# Networking Logic & Data Structure
+## Multiplayer
 
-### GodotSteam Integration
+- LAN: Host Local, then other players join the host's IP (default port 8080). Use `127.0.0.1` for multiple local instances.
+- Steam: start Steam, then Host Online and share the lobby code or invite friends. Steam must be initialized with authenticated accounts; LAN works when Steam is unavailable.
+- The host starts with 2–4 players. No joining after Start. A departing client forfeits its squad; remaining players continue. Host departure ends the session. Rematch requires every remaining player.
 
-This entire project is built upon the robust tool ecosystem of **[GodotSteam](https://codeberg.org/godotsteam/godotsteam)**.
+The host simulates all gasing. Commands validate sender ownership, selected slot, round, energy and cooldown. Compact snapshots run at 20 Hz; launch, elimination and results use reliable messages.
 
+## Checks
 
-Throughout the codebase, you will frequently encounter the `Steam` singleton, while you don't need a deep, comprehensive understanding of the entire GodotSteam API to use this project, paying attention to how and where this singleton is used will help you understand the logic behind the architecture.
+Using your Godot executable:
 
----
+```text
+Godot --headless --path . --script scripts/feature_checks.gd -- --test-mode
+Godot --headless --path . -- --test-mode netbot-host netbot-count=4
+Godot --headless --path . -- --test-mode netbot-join netbot-count=4
+```
 
-### Online.gd  (Autoload)
+Run one host and the required number of clients for netbot tests. Set `GODOT_MCP_HEADLESS_CHILD=1` for those child processes so their MCP file queues do not interfere with the editor's interactive game. `netbot-forfeit` makes a client leave after eight simulated seconds. Give each process a separate `--log-file` when collecting evidence.
 
-The `Online.gd` global script handles the connection logic for both direct IP and Steam.
-
-* **Data Management:** Maintains an active registry of `PlayerData` resources for each player in the lobby, ensuring peer information is safely stored and instantly accessible when needed.
-* **State Synchronization:** Broadcasts useful backend signals to keep the UI and game server perfectly in sync.
-
----
-
-### PlayerData Resource
-
-A custom **[Resource](https://docs.godotengine.org/en/stable/tutorials/scripting/resources.html)** responsible for storing essential peer information, including multiplayer ID, display name, character color, and Steam ID.
-
-> #### **RPC (Remote Procedure Calls) configuration**:
->
-> To safely transmit custom resources over the network via **[RPC](https://docs.godotengine.org/en/stable/tutorials/networking/high_level_multiplayer.html#remote-procedure-calls)**, the data must first be serialized.
-> 1. Call the `to_dict()` method on your resource to serialize its properties into a standard **[Dictionary](https://docs.godotengine.org/en/stable/classes/class_dictionary.html)**.
-> 2. Transmit the resulting dictionary via your RPC function.
-> 3. On the receiving peer, call the static `PlayerData.from_dict(dict: Dictionary)` method to completely reconstruct the `PlayerData` resource from the incoming payload.
-> 
-> It also dynamically tracks its own data so you can safely add custom player variables without worrying about the underlying serialization process.
-> 
->
-
----
-
-### P2P Data Payload System
-
-The `DataPayload` class is a lightweight, extensible packet-based system engineered for peer-to-peer data transfers. Both the class itself and its processing logic are housed entirely within the `Online.gd` script.
-
-* **Current Implementation:** Actively triggers in-game lobby invite warnings and routes direct message invites via the Steam app.
-* **Extensibility:** Designed for modularity. You can easily implement custom data packets by referencing the existing `STEAM_LOBBY_INVITE` payload type as a structural template.
-
+The retained checks cover action costs and timing, charge, collisions, reserve deadlines, result ties, XP, save migration and multiplayer input validation. Test Steam separately with different accounts; LAN success does not verify Steam connectivity.
