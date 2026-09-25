@@ -1,3 +1,25 @@
 Sound effects from Kenney (kenney.nl)
 Packs: "Impact Sounds", "Interface Sounds"
 License: CC0 1.0 Universal (public domain) - https://kenney.nl/support
+
+Music and SFX made for Gasing Pangkah
+Format: path | title | author | source | licence
+"Original" means synthesized in Python/numpy for this project (gamelan-style additive and modal synthesis, slendro/pelog tunings). No samples were used unless listed.
+music/menu.ogg | Menu - gamelan ladrang loop (slendro, 76 BPM, 32 beats) | original, generated for this project | - | original (project-owned)
+music/battle.ogg | Battle - gendang silat / kompang / pelog gamelan loop (136 BPM, 64 beats) | original, generated for this project | - | original (project-owned)
+music/cutscene.ogg | Cutscene - wayang kulit gender/slenthem bed (slendro, 60 BPM, 32 beats) | original, generated for this project | - | original (project-owned)
+music/victory.ogg | Victory stinger (4.4 s) | original, generated for this project | - | original (project-owned)
+music/defeat.ogg | Defeat stinger (4.4 s) | original, generated for this project | - | original (project-owned)
+sfx/whoosh.ogg | Dash whoosh | original, generated for this project | - | original (project-owned)
+sfx/jump.ogg | Jump lift-off | original, generated for this project | - | original (project-owned)
+sfx/rush_loop.ogg | Rush whirr/grind loop (2.0 s) | original, generated for this project | - | original (project-owned)
+sfx/charge_tick.ogg | Charge tick | original, generated for this project | - | original (project-owned)
+sfx/gong.ogg | Round-start gong | original, generated for this project | - | original (project-owned)
+sfx/ui_hover.ogg | UI hover tick | original, generated for this project | - | original (project-owned)
+sfx/cord_snap.ogg | Cord snap | original, generated for this project | - | original (project-owned)
+sfx/land.ogg | Wooden top landing thud | original, generated for this project | - | original (project-owned)
+sfx/crowd_cheer.ogg | Crowd cheer: synthesized crowd voices mixed with a 3 s excerpt of "Applause in a large hall or church" | applause by eXpl0it3r; voices/mix original | https://opengameart.org/content/applause-in-a-large-hall-or-church | CC0 1.0 (applause) + original
+
+Fonts (common/fonts/)
+body.ttf | Signika, static Regular instance (wght 400) cut from Signika[GRAD,wght].ttf | The Signika Project Authors (Anna Giedrys) | https://github.com/google/fonts/tree/main/ofl/signika | SIL Open Font License 1.1 (body_OFL.txt)
+Kurland.ttf | Kurland | GGBotNet | https://ggbot.itch.io/kurland-font | SIL Open Font License 1.1 (Kurland_LICENSE.txt)

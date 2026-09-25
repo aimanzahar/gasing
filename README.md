@@ -2,9 +2,25 @@
 
 Godot 4.7 arena battler with a Malaysian gasing workshop, campaign, endless mode and 2–4 player LAN/Steam FFA. Open `project.godot` in the GodotSteam-enabled Godot build used by this project and run `main.tscn`.
 
+| Title | Workshop | Battle | Round result |
+| --- | --- | --- | --- |
+| ![Title](screenshots/title.png) | ![Workshop](screenshots/workshop.png) | ![Battle](screenshots/battle.png) | ![Round result](screenshots/round_over.png) |
+
+| Wayang cutscene | How to play |
+| --- | --- |
+| ![Cutscene](screenshots/cutscene.png) | ![How to play](screenshots/how_to_play.png) |
+
+## Modes
+
+- **Story campaign:** seven masters across Malaysia, each introduced by a wayang kulit cutscene and fought in their own arena: Kelantan, Penang, Melaka, Terengganu, Sarawak, Sabah and Kuala Lumpur. A lost duel ends the run. Progress is saved, and the title offers CONTINUE.
+- **Endless Gelanggang:** a one-round-per-wave gauntlet against the masters in turn. Your best wave is recorded.
+- **Multiplayer:** 2–4 player FFA over LAN or Steam (see below).
+
+Settings (volume for master, music and SFX; fullscreen; low graphics; English or Bahasa Melayu) are saved in `user://settings.cfg`. HOW TO PLAY on the title screen explains the controls.
+
 ## Play
 
-Choose three owned gasing in the workshop; repeated styles are allowed. Drag the preview to inspect, scroll to zoom and double-click to reset. Choose Normal, Hard (default) or Master for solo play.
+Choose three owned gasing in the workshop; repeated styles are allowed. Drag the preview to inspect, scroll to zoom and double-click to reset. Choose Normal (default), Hard or Master for solo play. Each campaign duel against a master is best of 3 rounds; an endless wave is a single round.
 
 | Input | Action |
 | --- | --- |
@@ -16,7 +32,9 @@ Choose three owned gasing in the workshop; repeated styles are allowed. Drag the
 | Space | Jump: 25 energy, 2.5-second cooldown |
 | Hold/release Space with a reserve selected | Charge and launch that reserve |
 | A / D while charging | Aim the launch |
-| Esc while charging | Cancel charge |
+| Esc | Cancel a live charge; otherwise pause. Back in menus, skip in cutscenes |
+| F11 | Toggle fullscreen (also in Settings) |
+| Enter (workshop) | FIGHT |
 
 Opening charge also accepts the left mouse button. Release in the gold zone for more spin and energy; going past 95 breaks the cord. Energy never refills. Unselected gasing keep their momentum and spin without automatic attacks.
 
@@ -30,11 +48,21 @@ Each unique deployed, owned style gains 30 XP for a round win or 15 for a loss/d
 
 ## Multiplayer
 
-- LAN: Host Local, then other players join the host's IP (default port 8080). Use `127.0.0.1` for multiple local instances.
-- Steam: start Steam, then Host Online and share the lobby code or invite friends. Steam must be initialized with authenticated accounts; LAN works when Steam is unavailable.
+- LAN: HOST (LAN), then other players enter the host's IP and press JOIN BY IP (default port 8080). Use `127.0.0.1` for multiple local instances.
+- Steam: start Steam, then HOST (STEAM) and share the lobby code (friends use JOIN CODE) or invite friends. Steam must be initialized with authenticated accounts; LAN works when Steam is unavailable.
 - The host starts with 2–4 players. No joining after Start. A departing client forfeits its squad; remaining players continue. Host departure ends the session. Rematch requires every remaining player.
 
 The host simulates all gasing. Commands validate sender ownership, selected slot, round, energy and cooldown. Compact snapshots run at 20 Hz; launch, elimination and results use reliable messages.
+
+## Credits
+
+- Music and most SFX: synthesized for this project by `tools/gen_audio.py` (numpy, scipy, soundfile), in gamelan, gendang and kompang styles.
+- Crowd cheer: includes a CC0 excerpt of "Applause in a large hall or church" by eXpl0it3r (OpenGameArt).
+- Impact and interface sounds: Kenney.nl (CC0).
+- Fonts: Kurland by GGBotNet and Signika by The Signika Project Authors, both SIL OFL 1.1 (licences are in `common/fonts/`).
+- Engine: Godot Engine (MIT) and GodotSteam (MIT).
+
+Full per-file sources are listed in `assets/audio/CREDITS.txt`.
 
 ## Checks
 
