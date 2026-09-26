@@ -334,7 +334,6 @@ const STRINGS: Dictionary = {
 		"back_menu": "BACK TO MENU",
 		"locked_hint": "Beat %s to unlock",
 		"now_purchasable": "%s's gasing is now for sale in your workshop!",
-		"locked_beat": "Defeat %s to unlock this purchase.",
 		"locked_mp": "Locked — buy it in single player.",
 		"bought": "%s bought — spin it well!",
 		"need_coins": "Costs %d duit — you have %d.",
@@ -436,7 +435,7 @@ const STRINGS: Dictionary = {
 		"hud_launched": "LAUNCHED",
 		"hud_waiting": "Waiting for rivals · %ds",
 		"hud_reserve_n": "RESERVE %d",
-		"hud_cancel_spin": "Esc cancels · spin %d%%",
+		"hud_cancel_spin": "Mouse aims · Esc cancels\nSpin %d%%",
 		"prompt_grace": "No top spinning! Press %d + hold SPACE · auto in %ds",
 		"prompt_reserve": "Reserve %d auto-launches in %ds · press %d + hold SPACE",
 		"card_words": "SPIN|ENERGY|DASH|JUMP|RESERVE|OUT|Launches in %ds|Knocked out",
@@ -519,7 +518,6 @@ const STRINGS: Dictionary = {
 		"back_menu": "KEMBALI KE MENU",
 		"locked_hint": "Kalahkan %s untuk buka",
 		"now_purchasable": "Gasing %s kini boleh dibeli di bengkelmu!",
-		"locked_beat": "Kalahkan %s untuk membuka pembelian ini.",
 		"locked_mp": "Berkunci — beli dalam mod sendirian.",
 		"bought": "%s dibeli — pusinglah elok-elok!",
 		"need_coins": "Harga %d duit — kamu ada %d.",
@@ -621,7 +619,7 @@ const STRINGS: Dictionary = {
 		"hud_launched": "DILONTAR",
 		"hud_waiting": "Menunggu lawan · %ds",
 		"hud_reserve_n": "SIMPANAN %d",
-		"hud_cancel_spin": "Esc batal · pusingan %d%%",
+		"hud_cancel_spin": "Tetikus halakan · Esc batal\nPusingan %d%%",
 		"prompt_grace": "Tiada gasing! Tekan %d + tahan SPACE · auto %ds",
 		"prompt_reserve": "Simpanan %d auto dalam %ds · tekan %d, tahan SPACE",
 		"card_words": "PUSING|TENAGA|PECUT|LOMPAT|SIMPANAN|TUMBANG|Dilontar dalam %ds|Tersingkir",
@@ -2096,6 +2094,8 @@ func _can_buy(id: String) -> bool:
 func _craft_cycle(dir: int) -> void:
 	if net_active and net_ready_sent:
 		return # config already on the wire; a late switch would desync the peers
+	if _pending_buy != "":
+		craft_info.text = _t("pick_info") # the buy prompt belongs to the top you left
 	_pending_buy = ""
 	craft_index = wrapi(craft_index + dir, 0, STYLE_DEFS.size())
 	var id: String = _craft_viewed()
@@ -2108,31 +2108,24 @@ func _craft_cycle(dir: int) -> void:
 
 func _on_shape_selected(id: String) -> void:
 	if not unlocked_styles.has(id):
-		if net_active:
-			craft_info.text = _t("locked_mp")
-			return
-		var gate: int = _master_index(id)
+		if not _can_buy(id):
+			return # only FIGHT-as-BUY reaches here with a locked top, and only when it can buy
 		var price: int = int(STYLE_DEFS[id].get("price", 0))
-		if gate >= 0 and not defeated_masters.has(String(MASTERS[gate].id)):
-			craft_info.text = _t("locked_beat") % String(MASTERS[gate].name)
-		elif coins >= price:
-			if _pending_buy != id: # purchases take a confirming second press
-				_pending_buy = id
-				craft_info.text = _t("buy_confirm") % [String(STYLE_DEFS[id].label), price]
-				return
-			_pending_buy = ""
-			coins -= price
-			unlocked_styles.append(id)
-			selected_shape = id
-			loadout[loadout_slot] = id
-			_play_sfx(SND_WIN, -6.0, 0.05)
-			craft_info.text = _t("bought") % String(STYLE_DEFS[id].label)
-			_save_workshop()
-			_refresh_craft()
-			_update_workshop_preview()
-			_update_top_bar()
-		else:
-			craft_info.text = _t("need_coins") % [price, coins]
+		if _pending_buy != id: # purchases take a confirming second press
+			_pending_buy = id
+			craft_info.text = _t("buy_confirm") % [String(STYLE_DEFS[id].label), price]
+			return
+		_pending_buy = ""
+		coins -= price
+		unlocked_styles.append(id)
+		selected_shape = id
+		loadout[loadout_slot] = id
+		_play_sfx(SND_WIN, -6.0, 0.05)
+		craft_info.text = _t("bought") % String(STYLE_DEFS[id].label)
+		_save_workshop()
+		_refresh_craft()
+		_update_workshop_preview()
+		_update_top_bar()
 		return
 	selected_shape = id
 	loadout[loadout_slot] = id
@@ -2424,11 +2417,20 @@ func _toast(text: String, color: Color, world_pos: Vector3, big: bool) -> void:
 	var vp: Vector2 = hud.size
 	var screen: Vector2 = camera.unproject_position(world_pos + Vector3(0.0, 1.6, 0.0))
 	screen.x = clampf(screen.x, half_w, maxf(vp.x - half_w, half_w))
+	# rises 70 px: stays below the top bars, and below the banner band while one shows;
+	# floored before stacking, so two toasts at the floor stack downward instead of overlapping
+	var floor_y: float = TOAST_BANNER_FLOOR if is_instance_valid(_banner_box) else 150.0
+	screen.y = maxf(screen.y, floor_y)
+	var down: bool = false
 	for other: Node in hud.get_children():
-		if other.has_meta("toast") and (other as Control).position.distance_to(screen - Vector2(250.0, 25.0)) < 44.0:
-			screen.y -= 44.0
-	# rises 70 px: stays below the top bars, and below the banner band while one shows
-	screen.y = clampf(screen.y, TOAST_BANNER_FLOOR if is_instance_valid(_banner_box) else 150.0, vp.y - 110.0)
+		if not other.has_meta("toast"):
+			continue
+		var o: Control = other as Control
+		# the texts would overlap: close in y, and their centred spans meet in x
+		if absf(o.position.y + 25.0 - screen.y) < 44.0 and absf(o.position.x + 250.0 - screen.x) < half_w + o.get_minimum_size().x * 0.5:
+			down = down or screen.y - 44.0 < floor_y
+			screen.y += 44.0 if down else -44.0
+	screen.y = minf(screen.y, vp.y - 110.0)
 	l.position = screen - Vector2(250.0, 25.0)
 	l.set_meta("toast", true)
 	var tw: Tween = create_tween()

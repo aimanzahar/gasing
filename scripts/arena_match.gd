@@ -1037,6 +1037,13 @@ func _eliminated(rid: int, id: int, slot: int, reason: String) -> void:
 	if rid != round_id or not participants.has(id) or participants[id].slots[slot].state == "out":
 		return
 	participants[id].slots[slot].state = "out"
+	for s: int in 3: # a charging reserve's steering moves to a surviving top
+		if participants[id].slots[s].state == "alive":
+			if participants[id].last_live == slot:
+				participants[id].last_live = s
+			if id == my_id() and _steer_slot == slot:
+				_steer_slot = s
+			break
 	var top: Gasing = top_at(id, slot)
 	if is_instance_valid(top):
 		game._toast_elimination(top, reason)

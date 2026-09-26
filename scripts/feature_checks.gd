@@ -513,11 +513,12 @@ func _check_duel_flow() -> void:
 	# a rush re-scores 'big' every 0.3 s: the hit-stop + PANGKAH! share one 1 s cooldown
 	# (test mode never warps time, so the shared cooldown stands in for the hit-stop)
 	game._pangkah_next = 0
+	var t0: int = Time.get_ticks_msec()
 	game._hit_effects(Vector3.ZERO, 4.0, "hit")
 	var armed: int = game._pangkah_next
 	game._pangkah_next -= 700 # as if 0.7 s had passed
 	game._hit_effects(Vector3.ZERO, 4.0, "hit")
-	expect(armed - Time.get_ticks_msec() > 900 and game._pangkah_next == armed - 700, "A big hit 0.7 s after another re-arms neither the hit-stop nor the PANGKAH! callout")
+	expect(armed >= t0 + 1000 and game._pangkah_next == armed - 700, "A big hit 0.7 s after another does not re-arm the shared PANGKAH!/hit-stop cooldown (1 s)")
 	game.endless_mode = true
 	game.campaign_index = 2
 	game._enter_state(game.State.READY)
@@ -644,6 +645,8 @@ func _check_reserve_steer() -> void:
 	arena.select_slot(2) # charge the reserve in slot 2: slot 1 keeps steering
 	arena.update_hud()
 	expect(arena._hud_gauge_top == steer and steer._selected and not arena.top_at(1, 0)._selected, "While a reserve charges, the YOU bar and the ring follow the live top it leaves steering")
+	arena._eliminated(arena.round_id, 1, 1, "topple") # the steered top goes out: steering moves to slot 0
+	expect(arena.participants[1].last_live == 0 and arena._steer_slot == 0 and arena.top_at(1, 0)._selected, "When the top a charging reserve steers goes out, steering and the ring move to a surviving top")
 	arena.aim_angle = 0.0
 	Input.action_press("aim_left")
 	arena._update_charge(0.1)
@@ -699,6 +702,13 @@ func _check_banner_clears_toasts() -> void:
 	var band_bottom: float = game._banner_box.offset_bottom
 	expect(in_band.is_queued_for_deletion(), "A banner clears a world toast inside its band")
 	expect(raw - 70.0 < band_bottom and under.position.y + 25.0 - 70.0 >= band_bottom, "A toast raised under a banner ends its 70 px rise below the band")
+	game._toast("second under banner", Color.WHITE, far, false) # e.g. PANGKAH! then a deny at the same top
+	var second: Control = game.hud.get_child(game.hud.get_child_count() - 1)
+	var beside: Vector3 = far + Vector3(1.0, 0.0, 0.0) # a neighbouring top: its long text still meets theirs
+	var dx: float = game.camera.unproject_position(beside).x - game.camera.unproject_position(far).x
+	game._toast("Tok Wan Nik 2 toppled beside", Color.WHITE, beside, false)
+	var third: Control = game.hud.get_child(game.hud.get_child_count() - 1)
+	expect(second.position.y - under.position.y >= 44.0 and dx >= 44.0 and third.position.y - second.position.y >= 44.0, "Toasts floored under a banner stack downward instead of drawing over each other, a neighbour's wide text included")
 	game._banner_box.free()
 	game._banner_queue.clear()
 	for t: Node in game.hud.get_children():
@@ -731,6 +741,9 @@ func _check_locked_fight() -> void:
 	var buy_text: bool = game.fight_button.text == game._t("buy_prefix") + String(game.STYLE_DEFS.pakdin.label)
 	game._on_fight_pressed()
 	expect(buy_text and game._pending_buy == "pakdin" and game.state == game.State.CRAFT and not game.unlocked_styles.has("pakdin"), "On an affordable top for sale, FIGHT reads BUY and asks to confirm the purchase")
+	game.craft_index = keys.find("kelantan") - 1 # browse on to a locked top
+	game._craft_cycle(1)
+	expect(game._pending_buy == "" and game.craft_info.text == game._t("pick_info"), "Browsing away from a BUY prompt clears it from the info line")
 	game._enter_state(game.State.READY)
 	game._load_workshop()
 
