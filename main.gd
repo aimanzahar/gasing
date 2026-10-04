@@ -2872,6 +2872,17 @@ func _mk_divider() -> Control:
 	return d
 
 
+func _mk_vrule() -> VSeparator:
+	# hairline gold rule between side-by-side columns (the songket band only tiles horizontally)
+	var s: VSeparator = VSeparator.new()
+	var line: StyleBoxLine = StyleBoxLine.new()
+	line.vertical = true
+	line.color = Color(SONGKET_GOLD, 0.35)
+	line.thickness = 1
+	s.add_theme_stylebox_override("separator", line)
+	return s
+
+
 func _mk_fullrect_center() -> CenterContainer:
 	var c: CenterContainer = CenterContainer.new()
 	c.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -3704,56 +3715,64 @@ func _build_craft_panel() -> void:
 	craft_prev_button.pressed.connect(_craft_cycle.bind(-1))
 	craft_next_button.pressed.connect(_craft_cycle.bind(1))
 
-	# bottom sheet auto-heights from content: anchored to the bottom edge and
-	# grown upward — kept to 4 dense rows so the spinning preview stays visible
+	# bottom sheet auto-heights from content: anchored to the bottom edge and grown
+	# upward — three short columns (who | stats | forge) over the BACK/FIGHT row,
+	# so the spinning preview stays visible
 	var sheet: PanelContainer = _mk_panel_box(true, 2.0)
 	craft_sheet = sheet
 	sheet.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	sheet.offset_left = 80.0
-	sheet.offset_right = -80.0
-	sheet.offset_top = -12.0
-	sheet.offset_bottom = -12.0
+	sheet.offset_left = 40.0
+	sheet.offset_right = -40.0
+	sheet.offset_top = -10.0
+	sheet.offset_bottom = -10.0
 	sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	craft_panel.add_child(sheet)
 	var v: VBoxContainer = VBoxContainer.new()
-	v.add_theme_constant_override("separation", 4)
+	v.add_theme_constant_override("separation", 6)
 	sheet.add_child(v)
+	var body: HBoxContainer = HBoxContainer.new()
+	body.alignment = BoxContainer.ALIGNMENT_CENTER
+	body.add_theme_constant_override("separation", 22)
+	v.add_child(body)
 
-	# row 1: name + roster counter
+	# column 1: who — name + roster counter, role / lock status, level
+	var who: VBoxContainer = VBoxContainer.new()
+	who.alignment = BoxContainer.ALIGNMENT_CENTER
+	who.custom_minimum_size = Vector2(270.0, 0.0) # long roles wrap instead of widening the sheet
+	who.add_theme_constant_override("separation", 2)
+	body.add_child(who)
 	var name_row: HBoxContainer = HBoxContainer.new()
-	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	name_row.add_theme_constant_override("separation", 10)
-	v.add_child(name_row)
+	who.add_child(name_row)
 	craft_name_label = _mk_title("", 26)
 	name_row.add_child(craft_name_label)
 	craft_counter_label = _mk_label("", 13, CREAM_MUTED)
 	craft_counter_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	name_row.add_child(craft_counter_label)
-
-	# row 2: role / lock status + level on their own line
-	var info_row: HBoxContainer = HBoxContainer.new()
-	info_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	info_row.add_theme_constant_override("separation", 18)
-	v.add_child(info_row)
 	craft_status_label = _mk_label("", 15)
-	info_row.add_child(craft_status_label)
+	craft_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	craft_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	who.add_child(craft_status_label)
 	craft_level_label = _mk_label("", 15, PLAYER_COLOR)
 	craft_level_label.name = "StyleLevel"
-	info_row.add_child(craft_level_label)
+	craft_level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	who.add_child(craft_level_label)
 
-	# row 3: stat bars, each with its number
-	var stats_row: HBoxContainer = HBoxContainer.new()
-	stats_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	stats_row.add_theme_constant_override("separation", 30)
-	v.add_child(stats_row)
+	# column 2: stat bars stacked, each with its number
+	body.add_child(_mk_vrule())
+	var stats_col: VBoxContainer = VBoxContainer.new()
+	stats_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	stats_col.add_theme_constant_override("separation", 12)
+	body.add_child(stats_col)
 	craft_stat_rows = [
-		_mk_stat_row(stats_row, COPPER, true),
-		_mk_stat_row(stats_row, HT.ENERGY_BLUE, true),
-		_mk_stat_row(stats_row, PANDAN, true),
+		_mk_stat_row(stats_col, COPPER, true),
+		_mk_stat_row(stats_col, HT.ENERGY_BLUE, true),
+		_mk_stat_row(stats_col, PANDAN, true),
 	]
 	for r: Dictionary in craft_stat_rows:
 		(r.label as Label).add_theme_font_size_override("font_size", 14)
-		(r.bar as ProgressBar).custom_minimum_size = Vector2(172.0, 14.0)
+		(r.label as Label).custom_minimum_size = Vector2(72.0, 0.0) # fits "Imbangan"
+		(r.bar as ProgressBar).custom_minimum_size = Vector2(160.0, 14.0)
 		var num: Label = _mk_title("", 18, TEXT_COLOR)
 		num.add_theme_constant_override("outline_size", 4)
 		num.custom_minimum_size = Vector2(40.0, 0.0)
@@ -3761,37 +3780,40 @@ func _build_craft_panel() -> void:
 		(r.bar as Control).get_parent().add_child(num)
 		r["value"] = num
 
-	# row 4: forge — [material | BUY] per material, captioned with what it raises
+	# column 3: forge — one row per material: [material ×owned] what it adds [BUY];
+	# the rule lives inside forge_box so hiding the forge hides its divider too
 	var forge_box: HBoxContainer = HBoxContainer.new()
-	forge_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	forge_box.add_theme_constant_override("separation", 22)
-	v.add_child(forge_box)
+	body.add_child(forge_box)
 	craft_forge_box = forge_box
-	# Balance's material sits under the Balance column; both Mass materials lead from the left
-	for mat_id: String in ["merbau", "besi", "kemuning"]:
-		var mat_group: VBoxContainer = VBoxContainer.new()
-		mat_group.add_theme_constant_override("separation", 0)
-		forge_box.add_child(mat_group)
-		var mat_col: HBoxContainer = HBoxContainer.new()
-		mat_col.add_theme_constant_override("separation", 6)
-		mat_group.add_child(mat_col)
+	forge_box.add_child(_mk_vrule())
+	var forge: GridContainer = GridContainer.new()
+	forge.columns = 3
+	forge.add_theme_constant_override("h_separation", 12)
+	forge.add_theme_constant_override("v_separation", 2)
+	forge_box.add_child(forge)
+	for mat_id: String in ["merbau", "besi", "kemuning"]: # both Mass woods first, then Balance
 		var mb: Button = _mk_button("", WOOD_DARK, true)
 		mb.icon = load("res://assets/icon_%s.png" % mat_id)
-		mb.add_theme_constant_override("icon_max_width", 26)
+		mb.alignment = HORIZONTAL_ALIGNMENT_LEFT # icons line up down the column
+		mb.add_theme_constant_override("icon_max_width", 22)
 		mb.add_theme_constant_override("h_separation", 8)
 		mb.add_theme_font_size_override("font_size", 14)
 		mb.pressed.connect(_on_material_pressed.bind(mat_id))
-		mat_col.add_child(mb)
+		forge.add_child(mb)
 		material_buttons[mat_id] = mb
+		var gain: Label = _mk_label("", 13, CREAM_MUTED)
+		gain.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		forge.add_child(gain)
+		craft_forge_captions[mat_id] = gain
 		var buy: Button = _mk_button("", WOOD_AMBER)
 		buy.add_theme_font_size_override("font_size", 12)
 		buy.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		buy.pressed.connect(_on_material_bought.bind(mat_id))
-		mat_col.add_child(buy)
+		forge.add_child(buy)
 		material_buy_buttons[mat_id] = buy
-		var gain: Label = _mk_label("", 13, CREAM_MUTED)
-		mat_group.add_child(gain)
-		craft_forge_captions[mat_id] = gain
+	# the forge hides on locked tops; hold its height so the sheet doesn't jump while browsing
+	body.custom_minimum_size.y = forge.get_combined_minimum_size().y
 
 	# lacquer palette: a small card beside the preview it recolours
 	var palette: PanelContainer = _mk_panel_box(true)
