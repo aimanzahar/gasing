@@ -8,6 +8,25 @@ const WIND_SECONDS: float = 15.0
 const DEPLOY_AT: Array[float] = [0.0, 30.0, 45.0]
 const COLORS: Array[Color] = [HT.PLAYER_COLOR, HT.FOE_COLOR, Color(0.95, 0.38, 0.5), Color(0.58, 0.55, 1)] # FFA seats
 const FONT_TITLE: FontFile = preload("res://common/fonts/Kurland.ttf")
+# hazard telegraph: three cream chevrons outlined in ink on a 0.76 x 1.08 m strip (local +z = the push),
+# 0.36 m apart and scrolling forward at 0.6 m/s, faded in and out at the strip's ends
+const HAZARD_SHADER: String = """shader_type spatial;
+render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_never;
+uniform vec4 fill : source_color;
+uniform vec4 ink : source_color;
+uniform float alpha = 0.7;
+varying vec2 p;
+void vertex() { p = VERTEX.xz; }
+void fragment() {
+	vec2 q = vec2(abs(p.x), mod(p.y - TIME * 0.6, 0.36) - 0.18);
+	vec2 pa = q - vec2(0.0, 0.07);
+	vec2 ba = vec2(0.3, -0.165);
+	float d = length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
+	float aa = fwidth(d) + 0.0001;
+	ALBEDO = mix(ink.rgb, fill.rgb, 1.0 - smoothstep(0.045 - aa, 0.045 + aa, d));
+	ALPHA = alpha * (1.0 - smoothstep(0.067 - aa, 0.067 + aa, d)) * (1.0 - smoothstep(0.40, 0.54, abs(p.y)));
+}
+"""
 const SNAPSHOT_KEYS: Array[String] = ["position", "velocity", "control_velocity", "spin", "energy", "wobble", "dash_cd", "jump_cd", "nudge_cd", "dash_time", "jump_time", "rushing", "rush_direction", "launch_spin"]
 enum Phase { IDLE, WIND, BATTLE, RESULT, OVER }
 
@@ -57,6 +76,18 @@ var _card_words: Array = [] # squad card words (STRINGS card_words), rebuilt on 
 var ai_charge_slot: int = -1
 var ai_charge_power: float = 0.0
 var ai_aggro: bool = false
+# SP master knobs and arena hazard, set by begin_wind and cleared by _build_participants (MP and
+# test fixtures never carry them): think scales the AI's decision interval; tide > 0 alternates
+# tide-second ebb (hold the centre) and flood (aggressive) halves.
+var ai_think: float = 1.0
+var ai_tide: float = 0.0
+var _ai_ebb: bool = false
+var hazard: Dictionary = {} # ARENA_DEFS[current_arena].hazard: {kind slope|wind, strength, dir, period, gust, mode}
+var _gust_n: int = -1 # the wind cycle whose direction is rolled
+var _gust_dir: Vector3 = Vector3.RIGHT
+var _hazard_arrow: Node3D = null # the telegraph set, built once: chevron strip + gust streaks
+var _hazard_mat: ShaderMaterial = null
+var _hazard_gust: CPUParticles3D = null
 var bot_clock: float = 0.0
 var bot_rounds: int = 0
 var round_stats: Dictionary = {} # {owner_id: {hits, kos (topples caused), ringouts (caused), perfect}}
@@ -288,6 +319,11 @@ func _build_participants(configs: Dictionary) -> void:
 	participants.clear()
 	round_stats.clear()
 	last_ko_point = Vector3.ZERO
+	ai_think = 1.0
+	ai_tide = 0.0
+	_ai_ebb = false
+	hazard = {}
+	_gust_n = -1
 	# Roster order (not ready order) keeps colours and spawn seats stable across rounds.
 	var ids: Array = configs.keys() if roster.is_empty() else roster.keys()
 	var seated: Array = ids.filter(func(pid: int) -> bool: return configs.has(pid) and not disconnected.has(pid))
@@ -303,19 +339,36 @@ func _build_participants(configs: Dictionary) -> void:
 
 
 func begin_wind() -> void:
+	_hud_foe_top = null # the foe bar retitles for this fight's first rival top
 	if not game.net_active:
 		round_id += 1
 		disconnected.clear()
 		var opp: Dictionary = game._current_opponent()
 		ai_aggro = bool(opp.get("aggressive", false))
 		roster = {1: game._t("you"), 2: opp.name}
+		# buffs ride in each slot's stats (MP builds stats in sanitize_config, never here)
+		var buffs: Dictionary = game._active_buffs() # items + food; {} outside story fights
 		var mine: Array = []
 		for style: String in game.loadout:
-			mine.append({"style": style, "stats": game._style_battle_stats(style)})
-		var enemy: Array = [{"style": str(opp.mesh), "stats": opp.duplicate()}]
-		for style: String in ["jantung", "uri"]:
-			enemy.append({"style": style, "stats": game.STYLE_DEFS[style].duplicate()})
+			var stats: Dictionary = game._style_battle_stats(style)
+			stats.buffs = buffs
+			mine.append({"style": style, "stats": stats})
+		var foe: Dictionary = opp.duplicate()
+		var mirror: float = float(opp.get("mirror", 0.0))
+		if mirror > 0.0: # Mak Cik Ramlah: your slot-1 build, scaled, on her own top; your reserves
+			var you: Dictionary = game._style_battle_stats(game.loadout[0])
+			for k: String in ["mass", "spin_reserve", "balance"]:
+				foe[k] = float(you[k]) * mirror
+		foe.buffs = opp.get("buffs", {})
+		var enemy: Array = [{"style": str(opp.mesh), "stats": foe}]
+		for style: String in (game.loadout.slice(1) if mirror > 0.0 else opp.get("reserves", ["jantung", "uri"])):
+			var stats: Dictionary = game.STYLE_DEFS[style].duplicate()
+			stats.buffs = foe.buffs
+			enemy.append({"style": style, "stats": stats})
 		_build_participants({1: {"slots": mine}, 2: {"slots": enemy}})
+		ai_think = float(opp.get("think", 1.0))
+		ai_tide = float(opp.get("tide", 0.0))
+		hazard = game.ARENA_DEFS.get(game.current_arena, {}).get("hazard", {})
 	phase = Phase.WIND
 	game._update_top_bar() # medallion duel line for this fight
 	elapsed = 0.0
@@ -335,6 +388,7 @@ func begin_wind() -> void:
 	for id: int in participants:
 		_make_top(id, 0).set_winding(id == my_id())
 	_refresh_selected()
+	_hazard_tick(0.0) # a slope's arrow shows from WIND on
 	game.wind_meter.visible = true
 	game.wind_hint.visible = true
 	game.aim_arrow.visible = true
@@ -426,6 +480,8 @@ func clear_tops() -> void:
 	game.foe_top = null
 	charge_active = false
 	phase = Phase.IDLE
+	if _hazard_arrow != null:
+		_hazard_arrow.visible = false
 
 
 func reset() -> void:
@@ -436,6 +492,9 @@ func reset() -> void:
 	ready_configs.clear()
 	disconnected.clear()
 	rematches.clear()
+	if _hazard_arrow != null:
+		_hazard_arrow.queue_free()
+		_hazard_arrow = null
 	# Round IDs stay monotonic across rematches to reject delayed packets.
 
 
@@ -520,8 +579,9 @@ func _block_reason(kind: String) -> String:
 	var top: Gasing = top_at(my_id(), selected_slot)
 	if not is_instance_valid(top) or not top.alive or not top.battling:
 		return "none"
-	var cost: float = Gasing.DASH_COST if kind == "dash" else (Gasing.JUMP_COST if kind == "jump" else 0.01)
-	if top.energy < cost: # energy only drains, so a stale puppet value errs toward allowing
+	var cost: float = top.cost(Gasing.DASH_COST) if kind == "dash" else (top.cost(Gasing.JUMP_COST) if kind == "jump" else 0.01)
+	# energy only drains in MP (regen is an SP buff), so a stale puppet value errs toward allowing
+	if top.energy < cost:
 		return "energy"
 	# A puppet's cooldown is a snapshot old (50 ms + latency): near its end, let the host decide.
 	# ponytail: fixed 0.15 s margin; scale by measured RTT if laggy Steam peers get refused.
@@ -658,6 +718,11 @@ func accept_command(id: int, rid: int, slot: int, kind: String, data: Dictionary
 			var dir: Variant = data.get("dir")
 			if not finite_dir(dir) or dir.length() < 0.05:
 				return false
+			if top.buff("aim") > 0.0 and is_instance_valid(game.foe_top): # SP aim assist (buffs never ride in MP)
+				var d: Vector3 = Vector3(dir.x, 0.0, dir.z).normalized()
+				var to: Vector3 = Vector3(game.foe_top.position.x - top.position.x, 0.0, game.foe_top.position.z - top.position.z).normalized()
+				if d.dot(to) > 0.7: # within ~45 degrees of the nearest foe: bend toward it
+					dir = d.slerp(to, top.buff("aim"))
 			return top.dash(dir) if kind == "dash" else top.nudge(dir)
 	return false
 
@@ -677,10 +742,11 @@ func _deployed(rid: int, id: int, slot: int, power: float, angle: float, auto: b
 	participants[id].slots[slot].state = "alive"
 	participants[id].grace = -1.0
 	top.set_winding(false)
-	top.launch((-spawn_position(id, slot)).normalized().rotated(Vector3.UP, angle), game._wind_effectiveness(power))
+	var lo: float = _perfect_lo(id, slot)
+	top.launch((-spawn_position(id, slot)).normalized().rotated(Vector3.UP, angle), game._wind_effectiveness(power, lo))
 	var grade: String = "weak"
 	if not auto:
-		grade = "snap" if power > 95.0 else ("perfect" if power >= 80.0 else ("good" if power >= 40.0 else "weak"))
+		grade = "snap" if power > 95.0 else ("perfect" if power >= lo else ("good" if power >= 40.0 else "weak"))
 	if grade == "perfect":
 		_count(id, "perfect")
 	if id == my_id() and not auto:
@@ -707,12 +773,23 @@ func _deployed(rid: int, id: int, slot: int, power: float, angle: float, auto: b
 		print("netbot: deployed round=", rid, " owner=", id, " slot=", slot)
 
 
+func _perfect_lo(id: int, slot: int) -> float:
+	# the PERFECT band's floor: Kedah's charm (timing buff) lowers it for the local player only
+	if id != my_id():
+		return 80.0
+	return 80.0 - float(participants[id].slots[slot].stats.get("buffs", {}).get("timing", 0.0))
+
+
+func _ai_difficulty() -> int:
+	return 0 if game.fight_kind == "tutorial" else game.difficulty # the story tutorial always plays Normal
+
+
 func _try_start_battle() -> void:
 	if phase != Phase.WIND or not authority():
 		return
 	if not game.net_active and not winds.has(2):
 		var opp: Dictionary = game._current_opponent()
-		var floor_power: float = [55.0, 75.0, 85.0][game.difficulty]
+		var floor_power: float = [55.0, 75.0, 85.0][_ai_difficulty()]
 		winds[2] = Vector2(clampf(game._rng.randfn(opp.wind_mean, opp.wind_dev), floor_power, 95), game._rng.randf_range(-0.15, 0.15))
 	for id: int in participants:
 		if not disconnected.has(id) and not winds.has(id):
@@ -743,12 +820,14 @@ func _battle_started(rid: int) -> void:
 	game._play_action_sfx("gong")
 	if _tutorial_duel():
 		game._hint("steer")
+	if not hazard.is_empty():
+		game._hint(str(hazard.kind)) # "slope" | "wind"
 
 
 func _tutorial_duel() -> bool:
-	# Campaign duel 1 and Endless wave 1 teach: no early AI reserves, AI reserves charged to
+	# The story tutorial and Endless wave 1 teach: no early AI reserves, AI reserves charged to
 	# at most 60, one-shot hints (the AI's opening launch is not softened).
-	return not game.net_active and game.duel_index == 0
+	return not game.net_active and (game.fight_kind == "tutorial" or (game.endless_mode and game.duel_index == 0))
 
 
 func wind_time_left() -> float:
@@ -834,6 +913,8 @@ func _physics_process(delta: float) -> void:
 		if not game.net_active:
 			_ai_tick(delta)
 		_reserves_tick(delta)
+		if not game.net_active:
+			_hazard_tick(delta)
 		for top: Gasing in live_tops():
 			top._physics_process(delta)
 		collisions(delta)
@@ -927,6 +1008,99 @@ func _reserves_tick(delta: float) -> void:
 			p.grace = -1.0
 
 
+func _hazard_tick(delta: float) -> void:
+	# SP story hazards. A slope drifts every top downhill; wind blows for `gust` s at the end of
+	# each `period` s, after a 1 s telegraph. Drift moves position directly (MOMENTUM_DRAG would
+	# swallow a small force), scaled by (1 - hazard buff); its outward part fades out from r 3.0
+	# to 3.8, so a hazard alone parks a top short of the rope but never rings it out.
+	var kind: String = str(hazard.get("kind", ""))
+	var dir2: Vector2 = hazard.get("dir", Vector2.RIGHT)
+	var push: Vector3 = Vector3(dir2.x, 0.0, dir2.y) * float(hazard.get("strength", 0.0))
+	var glow: float = 0.7 # chevron alpha: a slope shows constantly
+	if kind == "wind":
+		var period: float = float(hazard.get("period", 8.0))
+		var n: int = floori(elapsed / period)
+		if n != _gust_n: # each cycle's direction is set before its telegraph: flip alternates, random rolls
+			_gust_n = n
+			var ang: float = game._rng.randf() * TAU if hazard.get("mode") == "random" else dir2.angle() + PI * (n % 2)
+			_gust_dir = Vector3(cos(ang), 0.0, sin(ang))
+		var until: float = (float(n) + 1.0) * period - float(hazard.get("gust", 2.0)) - elapsed # < 0 while it blows
+		push = _gust_dir * float(hazard.get("strength", 0.0)) if until < 0.0 else Vector3.ZERO
+		glow = 0.9 if until < 0.0 else (0.9 * (0.5 + 0.5 * sin(elapsed * TAU * 3.0)) if until < 1.0 else 0.0)
+	elif kind != "slope":
+		glow = 0.0
+	_show_hazard_arrow(push if kind == "slope" else _gust_dir, glow, kind == "wind" and glow > 0.0)
+	if push == Vector3.ZERO:
+		return
+	for top: Gasing in live_tops():
+		var drift: Vector3 = push * (1.0 - top.buff("hazard"))
+		var flat: Vector3 = Vector3(top.position.x, 0.0, top.position.z)
+		var r: float = flat.length()
+		if r > 0.01:
+			var out: float = drift.dot(flat / r)
+			if out > 0.0:
+				drift -= flat / r * out * clampf((r - 3.0) / 0.8, 0.0, 1.0)
+		top.position += drift * delta
+
+
+func _show_hazard_arrow(dir: Vector3, glow: float, gust: bool) -> void:
+	# chevrons on the push side, off the gold medallion (r 2.2-3.2), scrolling the way the hazard
+	# pushes; a wind's telegraph and gust add white streaks crossing the whole dish along it.
+	# The set turns with dir about the dish centre; freed with the match (reset).
+	if _hazard_arrow == null:
+		if glow <= 0.0:
+			return
+		_hazard_arrow = Node3D.new()
+		_hazard_arrow.position.y = 0.02
+		add_child(_hazard_arrow)
+		_hazard_mat = ShaderMaterial.new()
+		_hazard_mat.shader = Shader.new()
+		_hazard_mat.shader.code = HAZARD_SHADER
+		_hazard_mat.set_shader_parameter("fill", HT.TEXT_COLOR)
+		_hazard_mat.set_shader_parameter("ink", HT.INK)
+		var strip: PlaneMesh = PlaneMesh.new()
+		strip.size = Vector2(0.76, 1.08)
+		strip.material = _hazard_mat
+		var chevrons: MeshInstance3D = MeshInstance3D.new()
+		chevrons.mesh = strip
+		chevrons.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		chevrons.position.z = 2.7
+		_hazard_arrow.add_child(chevrons)
+		var streak_mat: StandardMaterial3D = StandardMaterial3D.new()
+		streak_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		streak_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		streak_mat.vertex_color_use_as_albedo = true # the colour ramp fades each streak in and out
+		streak_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.55)
+		var streak: PlaneMesh = PlaneMesh.new() # flat on the dish, long along the gust
+		streak.size = Vector2(0.035, 0.9)
+		streak.material = streak_mat
+		var fade: Gradient = Gradient.new()
+		fade.set_color(0, Color(1.0, 1.0, 1.0, 0.0))
+		fade.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+		fade.add_point(0.2, Color.WHITE)
+		fade.add_point(0.8, Color.WHITE)
+		_hazard_gust = CPUParticles3D.new()
+		_hazard_gust.emitting = false
+		_hazard_gust.amount = 20
+		_hazard_gust.lifetime = 1.1
+		_hazard_gust.mesh = streak
+		_hazard_gust.color_ramp = fade
+		_hazard_gust.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_hazard_gust.position = Vector3(0.0, 0.33, -4.4) # the upwind rope; streaks run to the far side
+		_hazard_gust.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		_hazard_gust.emission_box_extents = Vector3(3.6, 0.3, 0.4)
+		_hazard_gust.direction = Vector3.BACK # local +z, the gust
+		_hazard_gust.spread = 0.0
+		_hazard_gust.gravity = Vector3.ZERO
+		_hazard_gust.initial_velocity_min = 7.0
+		_hazard_gust.initial_velocity_max = 9.0
+		_hazard_arrow.add_child(_hazard_gust)
+	_hazard_arrow.visible = glow > 0.0 and dir != Vector3.ZERO
+	_hazard_arrow.rotation.y = atan2(dir.x, dir.z)
+	_hazard_mat.set_shader_parameter("alpha", glow)
+	_hazard_gust.emitting = gust and _hazard_arrow.visible
+
+
 func collisions(delta: float) -> void:
 	for key: String in pair_cooldowns.keys():
 		pair_cooldowns[key] -= delta
@@ -956,10 +1130,10 @@ func collisions(delta: float) -> void:
 			var a_rush_contact: bool = a.rush_paid_seconds > 0 and a.rush_direction.dot(dir) > 0.5
 			var b_rush_contact: bool = b.rush_paid_seconds > 0 and b.rush_direction.dot(-dir) > 0.5
 			if a_rush_contact:
-				b.spin = maxf(b.spin - 12 * a.rush_paid_seconds, 0)
+				b.take_spin(12 * a.rush_paid_seconds * (1.0 + a.buff("atk")), true)
 				b.set_meta("last_hit_by", a.owner_id)
 			if b_rush_contact:
-				a.spin = maxf(a.spin - 12 * b.rush_paid_seconds, 0)
+				a.take_spin(12 * b.rush_paid_seconds * (1.0 + b.buff("atk")), true)
 				a.set_meta("last_hit_by", b.owner_id)
 			if (a_rush_contact or b_rush_contact) and rush_fx_cd <= 0:
 				fx((a.position + b.position) * 0.5, 1.2, "grind", (a if a_rush_contact else b).team_color)
@@ -978,13 +1152,22 @@ func collisions(delta: float) -> void:
 			var bite: float = lerpf(0.4, 1.6, clampf((impact - Gasing.MOVE_SPEED) / (5.0 - Gasing.MOVE_SPEED), 0, 1))
 			var hit_b: float = minf(0.02 * a.spin * a.mass / b.mass + maxf(a_in, 0) * 1.3 * a.mass / b.mass, 2.4)
 			var hit_a: float = minf(0.02 * b.spin * b.mass / a.mass + maxf(b_in, 0) * 1.3 * b.mass / a.mass, 2.4)
-			a.apply_hit(-dir, hit_a, hit_a * bite)
-			b.apply_hit(dir, hit_b, hit_b * bite)
+			# outgoing spin damage: atk, plus crit on a PANGKAH-tier ram of your own
+			var out_a: float = 1.0 + a.buff("atk") + (a.buff("crit") if a_in >= 3.5 else 0.0)
+			var out_b: float = 1.0 + b.buff("atk") + (b.buff("crit") if b_in >= 3.5 else 0.0)
+			var a_lucky: bool = a.apply_hit(-dir, hit_a, hit_a * bite * out_b)
+			var b_lucky: bool = b.apply_hit(dir, hit_b, hit_b * bite * out_a)
+			var lucky: Gasing = a if a_lucky and a.owner_id == my_id() else (b if b_lucky and b.owner_id == my_id() else null)
+			if lucky != null:
+				game._toast(game._t("lucky"), HT.SONGKET_GOLD, lucky.position, false)
 			a.set_meta("last_hit_by", b.owner_id)
 			b.set_meta("last_hit_by", a.owner_id)
 			var attacker: Gasing = a if a_in >= b_in else b
 			if impact >= 1.5:
 				_count(attacker.owner_id, "hits")
+				attacker.on_hit_landed()
+				var victim: Gasing = b if attacker == a else a
+				victim.streak = 0
 			fx((a.position + b.position) * 0.5, impact, "hit", attacker.team_color)
 
 
@@ -1008,7 +1191,7 @@ func _hit_fx(rid: int, point: Vector3, strength: float, kind: String, tint: Colo
 func resolve_eliminations(forfeit: bool = false) -> void:
 	for top: Gasing in live_tops():
 		var reason: String = top.pending_elimination
-		if top.spin <= 0.08 * top.launch_spin:
+		if top.spin <= top.topple_spin():
 			reason = "topple"
 		if Vector2(top.position.x, top.position.z).length() > top.OUT_RADIUS:
 			reason = "ringout"
@@ -1140,6 +1323,8 @@ func _result(rid: int, winner: int, next_scores: Dictionary, reason: Dictionary 
 		round_stats = stats.duplicate(true) # the authority's tally, so every peer shows the same numbers
 	charge_active = false
 	reserve_warning_slot = -1
+	if _hazard_arrow != null:
+		_hazard_arrow.visible = false
 	for top: Gasing in live_tops():
 		top.end_round() # keeps spinning on screen but refuses every action
 	game.wind_meter.visible = false
@@ -1254,13 +1439,16 @@ func _ai_tick(delta: float) -> void:
 	var own: Array[Gasing] = live_tops(2)
 	var enemies: Array[Gasing] = live_tops(1)
 	var tutorial: bool = _tutorial_duel()
+	var skill: int = _ai_difficulty()
+	var ebb: bool = ai_tide > 0.0 and fmod(elapsed, ai_tide * 2.0) < ai_tide
+	var aggro: bool = ai_aggro or (ai_tide > 0.0 and not ebb) # a tide master floods in aggressively
 	ai_deploy_cd -= delta
 	# Charging a reserve is its own block: p.selected stays on the live top, which keeps fighting.
 	if ai_charge_slot >= 0:
 		if p.slots[ai_charge_slot].state != "reserve":
 			ai_charge_slot = -1
 		else:
-			var goal: float = minf([72.0, 85.0, 93.0][game.difficulty], 60.0 if tutorial else 100.0)
+			var goal: float = minf([72.0, 85.0, 93.0][skill], 60.0 if tutorial else 100.0)
 			ai_charge_power += 55 * delta
 			if ai_charge_power >= goal:
 				deploy(2, ai_charge_slot, goal)
@@ -1269,12 +1457,16 @@ func _ai_tick(delta: float) -> void:
 			and (not tutorial or elapsed >= DEPLOY_AT[reserve_slot(2)]):
 		ai_charge_slot = reserve_slot(2)
 		ai_charge_power = 0
-		ai_deploy_cd = [13.0, 9.0, 6.0][game.difficulty] * (0.7 if ai_aggro else 1.0)
+		ai_deploy_cd = [13.0, 9.0, 6.0][skill] * (0.7 if aggro else 1.0)
 	if own.is_empty():
 		return
+	if _ai_ebb and not ebb: # the tide turns: announce the surge
+		own[0].flash_accent()
+		game._toast(game._t("tide_surge"), HT.SIDE_FOE, own[0].position, false)
+	_ai_ebb = ebb
 	ai_cd -= delta
 	if ai_cd <= 0:
-		ai_cd = maxf([0.65, 0.4, 0.22][game.difficulty] - 0.015 * game.duel_index, 0.15)
+		ai_cd = maxf(([0.65, 0.4, 0.22][skill] - 0.015 * game.duel_index) * ai_think, 0.15)
 		var chosen: Gasing = own[0]
 		var danger: float = -1
 		for candidate: Gasing in own:
@@ -1294,7 +1486,7 @@ func _ai_tick(delta: float) -> void:
 		for enemy: Gasing in enemies:
 			var d: float = chosen.position.distance_to(enemy.position)
 			# Aggressive masters hunt tops already near the rim (one shove from a ring-out).
-			var score: float = d * (0.5 if ai_aggro and Vector2(enemy.position.x, enemy.position.z).length() > 3.0 else 1.0)
+			var score: float = d * (0.5 if aggro and Vector2(enemy.position.x, enemy.position.z).length() > 3.0 else 1.0)
 			if score < best:
 				best = score
 				target = enemy
@@ -1302,20 +1494,22 @@ func _ai_tick(delta: float) -> void:
 		var outward: Vector3 = Vector3(chosen.position.x, 0, chosen.position.z)
 		var dir: Vector3 = -outward.normalized()
 		p.rush = false
-		if is_instance_valid(target) and outward.length() < 2.9:
-			var lead: float = [0.15, 0.3, 0.45][game.difficulty]
+		if is_instance_valid(target) and outward.length() < 2.9 and (not ebb or distance < 1.5):
+			var lead: float = [0.15, 0.3, 0.45][skill]
 			dir = target.position + target.motion_velocity() * lead - chosen.position
 			dir.y = 0
-			dir = dir.normalized().rotated(Vector3.UP, game._rng.randfn(0, [0.25, 0.12, 0.04][game.difficulty]))
-			p.rush = distance < (2.4 if ai_aggro else 1.8) and chosen.energy >= 8 and chosen.spin > 0.2 * chosen.launch_spin
-			if target.rushing and distance < 2.1 and game.difficulty > 0:
-				if chosen.energy >= 25 and game.difficulty == 2:
+			dir = dir.normalized().rotated(Vector3.UP, game._rng.randfn(0, [0.25, 0.12, 0.04][skill]))
+			p.rush = distance < (2.4 if aggro else 1.8) and chosen.energy >= 8 and chosen.spin > 0.2 * chosen.launch_spin
+			if target.rushing and distance < 2.1 and skill > 0:
+				if chosen.energy >= 25 and skill == 2:
 					if not chosen.jump():
 						chosen.dash(dir.rotated(Vector3.UP, PI * 0.5))
 				else:
 					chosen.dash(dir.rotated(Vector3.UP, PI * 0.5))
 			elif distance < 2.4 and target.wobble > 0.1:
 				chosen.dash(dir)
+		elif ebb and outward.length() <= 1.0:
+			dir = Vector3.ZERO # ebb tide: hold the centre and counter-punch whoever comes close
 		p.move = dir
 		p.aim = dir
 	var top: Gasing = top_at(2, p.selected)
@@ -1407,7 +1601,7 @@ func _hud_centre() -> void:
 		if id != my_id() and (rival == 0 or int(scores.get(id, 0)) > best):
 			best = int(scores.get(id, 0))
 			rival = id
-	var pips: bool = game.net_active or not game.endless_mode # endless waves are single rounds
+	var pips: bool = game.net_active or not game._single_round() # only master duels are best of 3
 	if game.score_row.visible != pips:
 		game.score_row.visible = pips
 		for l: Label in [game.duel_label, game.hud_lead]: # no pips: the caption moves up into the gap
@@ -1456,6 +1650,8 @@ func _hud_bars() -> void:
 	else:
 		game.foe_gauge.frac = 0.0
 		game.foe_gauge.wobbling = false
+		if not game.net_active: # no rival top yet (WIND): the fight's opponent, never the last one's
+			game.foe_gauge.title = short_name(str(roster.get(2, "")), 18)
 	# FFA with 3-4 seats: a standings row per rival under the foe bar
 	var row_i: int = 0
 	if participants.size() > 2:
@@ -1482,7 +1678,7 @@ func _hud_wind() -> void:
 		return
 	var mode: int = 2 if phase == Phase.BATTLE else (1 if initial_sent else 0)
 	var secs: int = ceili(wind_time_left())
-	var spin_pct: int = roundi(100.0 * game._wind_effectiveness(charge_power))
+	var spin_pct: int = roundi(100.0 * game._wind_effectiveness(charge_power, _perfect_lo(my_id(), selected_slot)))
 	var key: int = ((mode * 4 + selected_slot) * 100 + secs) * 1000 + spin_pct
 	if key == _hud_wind_key and game.lang == _hud_lang:
 		return
@@ -1528,8 +1724,8 @@ func _hud_cards() -> void:
 			card.queue_redraw()
 		card.show_slot(state, slot == selected_slot, _side(my_id()),
 			top.spin / top.spin_reserve if alive else 0.0, top.energy if alive else 0.0,
-			alive and top.energy >= Gasing.DASH_COST and top.dash_cd <= 0.0,
-			alive and top.energy >= Gasing.JUMP_COST and top.jump_cd <= 0.0, maxf(left, 0.0), total, _card_words)
+			alive and top.energy >= top.cost(Gasing.DASH_COST) and top.dash_cd <= 0.0,
+			alive and top.energy >= top.cost(Gasing.JUMP_COST) and top.jump_cd <= 0.0, maxf(left, 0.0), total, _card_words)
 	var warn: int = reserve_warning_slot if phase == Phase.BATTLE else -1
 	reserve_prompt.visible = warn >= 0
 	if warn < 0:

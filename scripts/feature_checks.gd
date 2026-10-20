@@ -16,6 +16,11 @@ class ResultSink extends Node:
 	var lang: String = "en"
 	var endless_mode: bool = false
 	var duel_index: int = 0
+	var fight_kind: String = ""
+	var difficulty: int = 0
+	var current_arena: String = ""
+	var ARENA_DEFS: Dictionary
+	var _rng: RandomNumberGenerator
 	var menus: Node = null
 	var player_top: Gasing
 	var foe_top: Gasing
@@ -40,6 +45,14 @@ class ResultSink extends Node:
 		PLAYER_COLOR = game_node.PLAYER_COLOR
 		DANGER = game_node.DANGER
 		SND_LAUNCH = game_node.SND_LAUNCH
+		ARENA_DEFS = game_node.ARENA_DEFS
+		_rng = game_node._rng
+
+	func _single_round() -> bool:
+		return endless_mode or fight_kind != "master"
+
+	func _active_buffs() -> Dictionary:
+		return {} # fixtures set each top's buffs directly
 
 	func _award_style_xp(styles: Array, won: bool) -> void:
 		real_game._award_style_xp(styles, won)
@@ -51,8 +64,8 @@ class ResultSink extends Node:
 		results += 1 # Capture completion without starting campaign or rematch timers.
 		last_reason = reason
 
-	func _wind_effectiveness(power: float) -> float:
-		return real_game._wind_effectiveness(power)
+	func _wind_effectiveness(power: float, lo: float = 80.0) -> float:
+		return real_game._wind_effectiveness(power, lo)
 
 	func _style_accent(id: String) -> Color:
 		return real_game._style_accent(id)
@@ -128,6 +141,7 @@ func _run() -> void:
 	_check_keybinds_and_designs()
 	_check_progression()
 	_check_migration()
+	_check_story_data()
 	_check_commands()
 	await _check_selection()
 	_check_roster_order()
@@ -146,6 +160,10 @@ func _run() -> void:
 	_check_left_before_battle()
 	_check_banner_clears_toasts()
 	_check_locked_fight()
+	_check_story_flow()
+	_check_buffs()
+	_check_ending()
+	await _check_food_stall()
 	_check_strings()
 	await _check_round_advance()
 	_check_volume_slider()
@@ -176,7 +194,7 @@ func _check_keybinds_and_designs() -> void:
 			top.setup("Inspect", str(stats.shape), stats, Color.GOLD)
 			var bands: int = 0
 			for child: Node in top.get_node("Visual").get_children():
-				if child is MeshInstance3D and child.mesh is TorusMesh:
+				if child is MeshInstance3D and child.mesh is CylinderMesh and not (child.mesh as CylinderMesh).cap_top: # open lacquer hoops
 					bands += 1
 			expect(top.level == level and bands == level - 1, "%s level %d has its earned visual bands" % [style, level])
 			top.free()
@@ -214,10 +232,12 @@ func _check_migration() -> void:
 	legacy.set_value("workshop", "materials", {"merbau": 4})
 	legacy.set_value("workshop", "shapes", {"kelantan": {"mass": 2.6, "balance": 81.0}})
 	legacy.set_value("workshop", "accents", {"kelantan": Color.CORAL})
-	legacy.set_value("workshop", "defeated", ["kelantan"])
+	legacy.set_value("workshop", "defeated", ["kelantan"]) # the old 7-master campaign's
+	legacy.set_value("workshop", "campaign_index", 3)
 	legacy.set_value("workshop", "endless_best", 8)
 	game._load_workshop(legacy)
-	expect(game.coins == 123 and game.materials_owned.merbau == 4 and game.endless_best == 8 and game.defeated_masters.has("kelantan"), "v2 migration preserves economy and accomplishments")
+	expect(game.coins == 123 and game.materials_owned.merbau == 4 and game.endless_best == 8 and game.unlocked_styles.has("kelantan"), "v2 migration keeps the wallet: coins, materials, owned tops, Endless best")
+	expect(game.defeated_masters.is_empty() and game.story_index == 0 and game.story_seen == -1 and not game.tutorial_done and game.story_ending == "" and game.food_active.is_empty(), "A pre-v4 save restarts the story from the shipwreck")
 	expect(game.player_shapes.kelantan.mass == 2.6 and game.player_shapes.kelantan.balance == 81.0 and game.style_accents.kelantan == Color.CORAL, "v2 migration preserves forging and lacquer")
 	expect(game.loadout == ["kelantan", "uri", "jantung"] and game._style_level("kelantan") == 1 and game.difficulty == 0, "v2 gains safe squad, level and Normal difficulty defaults")
 	legacy.set_value("workshop", "style_xp", {"jantung": -20, "uri": 1e30, "kelantan": NAN, "unknown": 100})
@@ -227,9 +247,44 @@ func _check_migration() -> void:
 	expect(game._style_level("jantung") == 1 and game._style_level("uri") == 5 and game._style_level("kelantan") == 1 and not game.style_xp.has("unknown"), "Corrupt XP is bounded and unknown styles ignored")
 	expect(game.loadout == ["kelantan", "uri", "uri"] and game.difficulty == 0, "Invalid, locked and excess loadout entries are ignored")
 	legacy.set_value("workshop", "difficulty", 2)
-	legacy.set_value("workshop", "campaign_index", 99)
 	game._load_workshop(legacy)
-	expect(game.difficulty == 2 and game.campaign_index == game.MASTERS.size() - 1, "Saved difficulty is kept and campaign progress is clamped")
+	expect(game.difficulty == 2, "Saved difficulty is kept")
+	# v4: the story keys load, each validated against story_data
+	var v4: ConfigFile = ConfigFile.new()
+	v4.set_value("workshop", "version", 4)
+	v4.set_value("workshop", "defeated", ["perlis", "kedah", "kl", "nowhere", "perlis"])
+	v4.set_value("workshop", "story_index", 2)
+	v4.set_value("workshop", "story_seen", 1)
+	v4.set_value("workshop", "tutorial_done", true)
+	v4.set_value("workshop", "food_active", {"state": 1, "fights_left": 2})
+	game._load_workshop(v4)
+	expect(game.defeated_masters == ["perlis", "kedah"] and game.story_index == 2 and game.story_seen == 1 and game.tutorial_done and game.food_active == {"state": 1, "fights_left": 2}, "v4 story keys load; unknown and Endless-boss ids are dropped from the beaten list")
+	v4.set_value("workshop", "story_index", 99)
+	v4.set_value("workshop", "story_seen", 99)
+	v4.set_value("workshop", "tutorial_done", false)
+	v4.set_value("workshop", "food_active", {"state": 1, "fights_left": 99})
+	v4.set_value("workshop", "story_ending", "stay")
+	game._load_workshop(v4)
+	var clamped: bool = game.story_index == 2 and game.story_seen == 2 and game.tutorial_done and game.story_ending == ""
+	var fights_capped: bool = game.food_active == {"state": 1, "fights_left": int(game.MASTERS[1].food.fights)}
+	v4.set_value("workshop", "food_active", {"state": 5, "fights_left": 2})
+	game._load_workshop(v4)
+	expect(clamped and fights_capped and game.food_active.is_empty(), "A v4 save never runs past the first unbeaten master, ends unbeaten, or eats an unearned or over-long dish")
+	var all_ids: Array = []
+	for m: Dictionary in game.MASTERS:
+		all_ids.append(m.id)
+	v4.set_value("workshop", "defeated", all_ids)
+	v4.set_value("workshop", "story_index", 5)
+	game._load_workshop(v4)
+	expect(game.story_ending == "stay" and game.story_index == 5 and game.defeated_masters.size() == game.MASTERS.size(), "After the last master the ending and free travel load as saved")
+	var inferred: bool = game.journey_done # a save from before the flag: its chosen ending implies it
+	v4.set_value("workshop", "story_ending", "")
+	v4.set_value("workshop", "journey_done", true)
+	game._load_workshop(v4)
+	var kept: bool = game.journey_done
+	v4.set_value("workshop", "journey_done", "yes")
+	game._load_workshop(v4)
+	expect(inferred and kept and not game.journey_done, "journey_done loads as saved; a chosen ending implies it, a non-bool is ignored")
 	game._load_workshop() # Test mode resets defaults without reading user://.
 
 
@@ -496,14 +551,37 @@ func _check_duel_flow() -> void:
 	game.player_shapes.jantung.mass = 2.0
 	game._on_material_pressed("merbau")
 	expect(capped_kept and game.materials_owned.merbau == 0 and is_equal_approx(game.player_shapes.jantung.mass, 2.3), "Forging spends a material only when it changes the top")
+	# story fights never reset the journey: a lost master duel goes back to the loadout, a won
+	# one marks the state beaten and leads to the hub; a village win pays and brings the next villager
+	game._load_workshop()
 	game.endless_mode = false
-	game.duel_index = game.MASTERS.size() - 1
-	game._finish_duel(true)
-	var after_final: int = game.campaign_index
-	game.duel_index = 2
-	game.campaign_index = 2
+	game.story_index = 1
+	game.story_seen = 1
+	game.tutorial_done = true
+	game.duel_index = 1
+	var kinds_single: bool = true
+	for pair: Array in [["tutorial", true], ["local", true], ["master", false]]:
+		game.fight_kind = pair[0]
+		kinds_single = kinds_single and game._single_round() == pair[1]
+	expect(kinds_single, "Only master duels are best of 3; the tutorial and village matches are one round")
 	game._finish_duel(false)
-	expect(after_final == 0 and game.campaign_index == 0, "Beating the last master or losing a duel resets campaign progress before the panel times out")
+	var lost_kept: bool = game.defeated_masters.is_empty() and game.story_index == 1 and game.coins == 0
+	game._after_round(false)
+	expect(lost_kept and game.state == game.State.CRAFT and game.fight_kind == "master", "A lost master duel resets nothing and returns to the loadout for a retry")
+	game._finish_duel(true)
+	var beaten: bool = game.defeated_masters == ["kedah"] and game.story_index == 1 and game.duel_index == 1 and game.coins == int(game.MASTERS[1].coins)
+	game._after_round(true)
+	expect(beaten and game.state == game.State.HUB and game.fight_kind == "", "A master win marks the state beaten, pays the full purse and goes to the hub")
+	game.menus.close_pause() # the journal reward card
+	game._on_hub_fight_pressed("local")
+	game._on_fight_pressed()
+	var villager: Dictionary = game._current_opponent()
+	var purse: int = int(villager.coins)
+	var before: int = game.coins
+	game._finish_duel(true)
+	var paid: bool = purse == 12 + 3 * 1 and game.coins == before + purse and game.local_pick == 1 and game._current_opponent().name != villager.name
+	game._after_round(true)
+	expect(paid and game.state == game.State.CRAFT and game.fight_kind == "local", "A village win pays 12+3i, brings the next villager and returns to the loadout")
 	game._enter_state(game.State.READY) # disarms the pending _after_round timers
 	game._load_workshop() # Test mode resets defaults without reading user://.
 	for kind: String in ["hit", "grind", "rim", "land", "ko"]:
@@ -520,14 +598,17 @@ func _check_duel_flow() -> void:
 	game._hit_effects(Vector3.ZERO, 4.0, "hit")
 	expect(armed >= t0 + 1000 and game._pangkah_next == armed - 700, "A big hit 0.7 s after another does not re-arm the shared PANGKAH!/hit-stop cooldown (1 s)")
 	game.endless_mode = true
-	game.campaign_index = 2
+	game.story_index = 2
+	game.story_seen = 2
+	game.tutorial_done = true
 	game._enter_state(game.State.READY)
 	var space: InputEventKey = InputEventKey.new()
 	space.keycode = KEY_SPACE
 	space.pressed = true
 	game._unhandled_input(space)
-	expect(game.state == game.State.CRAFT and not game.endless_mode and game.duel_index == 2, "Title SPACE continues the campaign, never Endless")
-	game.campaign_index = 0
+	expect(game.state == game.State.HUB and not game.endless_mode and game.duel_index == 2 and game.current_arena == game.MASTERS[2].arena, "Title SPACE continues the story in its hub, never Endless")
+	game._enter_state(game.State.READY)
+	game._load_workshop()
 
 
 func _check_squad_hud() -> void:
@@ -549,7 +630,7 @@ func _check_music() -> void:
 	if game._music_key == "victory" or game._music_key == "defeat":
 		game._on_music_finished(game._music[game._music_idx]) # the duel checks above left a stinger playing
 	var map: Dictionary = game.STATE_MUSIC
-	expect(map[game.State.READY] == "menu" and map[game.State.CRAFT] == "menu" and map[game.State.OVER] == "menu" and map[game.State.CUTSCENE] == "cutscene" 		and map[game.State.WIND] == "battle" and map[game.State.BATTLE] == "battle" and not map.has(game.State.ROUND_OVER), "Each screen maps to its music bed; the battle bed carries on between rounds")
+	expect(map[game.State.READY] == "menu" and map[game.State.CRAFT] == "menu" and map[game.State.OVER] == "menu" and map[game.State.HUB] == "menu" and map[game.State.CUTSCENE] == "cutscene" 		and map[game.State.WIND] == "battle" and map[game.State.BATTLE] == "battle" and not map.has(game.State.ROUND_OVER), "Each screen maps to its music bed; the battle bed carries on between rounds")
 	game._enter_state(game.State.READY)
 	var bed: AudioStreamPlayer = game._music[game._music_idx]
 	game._enter_state(game.State.CRAFT)
@@ -607,17 +688,43 @@ func _check_mp_round_break() -> void:
 
 
 func _check_forfeit() -> void:
-	# pause FORFEIT DUEL loses a live campaign duel (no free replay from 0-0); workshop BACK keeps the campaign
+	# pause BACK TO VILLAGE loses a live story fight (no free replay) and keeps the journey;
+	# the workshop's BACK returns to the hub; Endless leaves to the title
+	game._load_workshop()
 	game.endless_mode = false
-	game.campaign_index = 3
-	game.state = game.State.BATTLE
+	game._start_tutorial() # an abandoned first match still counts as the tutorial
 	game._forfeit_duel()
-	var forfeited: bool = game.campaign_index == 0 and game.state == game.State.READY
-	game.campaign_index = 3
+	var tutorial_left: bool = game.state == game.State.HUB and game.tutorial_done
+	game.story_index = 1
+	game.story_seen = 1
+	game.defeated_masters.append("perlis")
+	game._enter_state(game.State.HUB)
+	game._on_hub_fight_pressed("master")
+	game._on_fight_pressed()
+	game._forfeit_duel()
+	var forfeited: bool = game.state == game.State.HUB and game.story_index == 1 and game.defeated_masters == ["perlis"] and game.coins == 0
+	# a forfeit is a fought fight: the dish is eaten and the next villager steps up, as after a loss
+	game.food_active = {"state": 0, "fights_left": 2}
+	var pick: int = game.local_pick
+	game._on_hub_fight_pressed("local")
+	game._on_fight_pressed()
+	game._forfeit_duel()
+	var eaten: bool = int(game.food_active.get("fights_left", 0)) == 1 and game.local_pick == pick + 1
+	game._on_hub_fight_pressed("master")
+	game._on_fight_pressed()
+	game._forfeit_duel()
+	expect(eaten and game.food_active.is_empty() and game.local_pick == pick + 1 and game.state == game.State.HUB,
+		"Forfeiting a story fight uses up a food fight; a village match also brings the next villager, a master duel doesn't")
+	game._on_hub_fight_pressed("local")
+	game._craft_back()
+	var back: bool = game.state == game.State.HUB
+	game.endless_mode = true
 	game._enter_state(game.State.CRAFT)
-	game._leave_to_title()
-	expect(forfeited and game.campaign_index == 3 and game.state == game.State.READY, "Forfeiting a live duel ends the run; leaving the workshop keeps the campaign")
-	game.campaign_index = 0
+	game._on_fight_pressed()
+	game._forfeit_duel()
+	expect(tutorial_left and forfeited and back and game.state == game.State.READY and game.story_index == 1, "Forfeiting a story fight returns to the hub with the journey kept; workshop BACK goes to the hub; Endless leaves to the title")
+	game.endless_mode = false
+	game._load_workshop()
 	# alt-tab on a round panel: the flag makes the next WIND open the pause (that pause itself
 	# is gated off in test mode, so only the focus bookkeeping is checked here)
 	game.notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
@@ -691,6 +798,7 @@ func _check_banner_clears_toasts() -> void:
 	if is_instance_valid(game._banner_box):
 		game._banner_box.free()
 	game._banner_queue.clear()
+	game._set_vista(false) # toasts rise over the battle pose (the title's vista never has any)
 	game._toast("band check", Color.WHITE, Vector3.ZERO, false)
 	var in_band: Control = game.hud.get_child(game.hud.get_child_count() - 1)
 	in_band.position.y = 125.0 # centre y 150: the old floor, inside the band (y 122-192)
@@ -722,7 +830,7 @@ func _check_locked_fight() -> void:
 	game._load_workshop() # a fresh workshop: jantung + uri, no coins
 	game.endless_mode = false
 	game.duel_index = 0
-	game._seen_cutscenes[String(game._current_opponent().id)] = true # straight to the wind-up
+	game.fight_kind = "local" # a Perlis village match from the hub's loadout
 	var keys: Array = game.STYLE_DEFS.keys()
 	var usable: bool = true
 	for id: String in ["kelantan", "datuk"]: # behind an unbeaten master; more coins than owned
@@ -744,8 +852,13 @@ func _check_locked_fight() -> void:
 	game.craft_index = keys.find("kelantan") - 1 # browse on to a locked top
 	game._craft_cycle(1)
 	expect(game._pending_buy == "" and game.craft_info.text == game._t("pick_info"), "Browsing away from a BUY prompt clears it from the info line")
+	game.coins = 1000
+	var kl_shut: bool = not game._can_buy("kl") and game._shop_gate("kl") == game._t("locked_story")
+	game.story_ending = "stay"
+	expect(kl_shut and game._can_buy("kl"), "The Endless boss's top goes on sale only once the journey has ended")
 	game._enter_state(game.State.READY)
 	game._load_workshop()
+	game.fight_kind = ""
 
 
 func _check_strings() -> void:
@@ -809,3 +922,367 @@ func _check_atomic_save() -> void:
 		if FileAccess.file_exists(leftover):
 			DirAccess.remove_absolute(leftover)
 	DirAccess.remove_absolute(dir)
+
+
+func _check_story_data() -> void:
+	# story_data.gd: 13 states in order, every mesh / villager / arena / reserve resolves, the
+	# beat contract, both languages everywhere, buff keys within the caps, a fare to every next stop
+	var SD: Script = game.SD
+	var ids: Array = game.MASTERS.map(func(m: Dictionary) -> String: return m.id)
+	expect(ids == SD.STATE_IDS and ids.size() == 13 and ids[0] == "perlis" and ids[-1] == "sarawak", "13 story states, Perlis to Sarawak, in travel order")
+	var base: Array = ["jantung", "uri", "pakdin", "cikros", "tokgayong", "datuk"]
+	var resolves: bool = true
+	var beats_ok: bool = true
+	var buffs_ok: bool = true
+	var numbers_ok: bool = true
+	for i: int in game.MASTERS.size():
+		var m: Dictionary = game.MASTERS[i]
+		resolves = resolves and game.STYLE_DEFS.has(m.mesh) and game.ARENA_DEFS.has(m.arena) and m.locals.size() == 3 \
+				and m.locals.all(func(l: Dictionary) -> bool: return l.mesh in base) \
+				and m.get("reserves", []).all(func(r: Variant) -> bool: return game.STYLE_DEFS.has(r)) \
+				and game.STRINGS.en.has("role_" + String(m.mesh))
+		beats_ok = beats_ok and m.beats.map(func(b: Dictionary) -> String: return b.kind) == ["land", "people", "food", "master"]
+		for b: Dictionary in [m.buffs, m.item.buffs, m.food.buffs]:
+			buffs_ok = buffs_ok and b.keys().all(func(k: String) -> bool: return SD.BUFF_CAPS.has(k))
+		var last: bool = i == game.MASTERS.size() - 1
+		numbers_ok = numbers_ok and int(m.food.price) > 0 and int(m.food.fights) > 0 and int(m.coins) > 0 \
+				and (m.transport.is_empty() if last else int(m.transport.get("fare", 0)) > 0)
+	expect(resolves, "Every master's top, arena, villagers' base tops, reserves and role line resolve")
+	expect(beats_ok, "Every state tells land, people, food, then master")
+	expect(buffs_ok, "Every item, dish and master buff key has a cap")
+	expect(numbers_ok, "Every dish has a price and a length, every master a purse, every state but the last a fare")
+	var tellings: Array = game.MASTERS + SD.PROLOGUE + SD.ENDING + SD.EPILOGUE_HOME + SD.EPILOGUE_STAY + [SD.KL_BOSS]
+	expect(_bilingual(tellings), "Every story string exists, non-empty, in English and Malay")
+	var kinds: Dictionary = {"travel": true}
+	for b: Dictionary in SD.PROLOGUE + SD.ENDING + SD.EPILOGUE_HOME + SD.EPILOGUE_STAY + game.MASTERS[0].beats:
+		kinds[b.kind] = true
+	expect(kinds.has("village") and kinds.keys().all(func(k: String) -> bool: return game.STRINGS.en.has("beat_" + k)), "Every beat kind (the prologue's village too) has its kelir header")
+	var kl: Dictionary = SD.KL_BOSS
+	expect(kl.mesh == "kl" and game.STYLE_DEFS.has("kl") and game.ARENA_DEFS.has(kl.arena) and game._master_index("kl") < 0, "The KL boss stays, Endless only")
+	expect(game._endless_opponent(0).id == ids[0] and game._endless_opponent(13).id == "kl" and game._endless_opponent(14).id == ids[0] and game._endless_opponent(3).coins == 8 + 4 * 3, "Endless cycles the 13 masters then the KL boss, paying 8+4w")
+	var laps_ok: bool = not game._endless_opponent(27).buffs.is_empty()
+	for w: int in 28:
+		var b: Dictionary = game._endless_opponent(w).buffs
+		laps_ok = laps_ok and (b.is_empty() if w < 14 else b.keys().all(func(k: String) -> bool: return float(b[k]) <= float(SD.BUFF_CAPS[k])))
+	expect(laps_ok, "Endless lap one fights without the masters' buffs; later laps bring them back under SD.BUFF_CAPS")
+	game._apply_arena("sarawak")
+	var tinted: bool = game._floor_mat.albedo_color == game.ARENA_DEFS.sarawak.floor
+	game._apply_arena("kampung")
+	expect(tinted and game._floor_mat.albedo_color == Color(0.6, 0.42, 0.23), "The dish takes its arena's floor colour, compacted earth by default")
+	var layers: Array = [game.cut_bg, game.cut_art_prev, game.cut_art, game.cut_ride, game.cut_top, game.cut_puppet]
+	expect(game.cut_art.material is ShaderMaterial and layers.all(func(r: TextureRect) -> bool: return r.material == game.cut_art.material), "Every kelir stage layer shares the edge-fade material")
+	var hazards_ok: bool = true
+	for id: String in game.ARENA_DEFS:
+		var h: Dictionary = game.ARENA_DEFS[id].get("hazard", {})
+		hazards_ok = hazards_ok and (h.is_empty() or (h.kind in ["slope", "wind"] and float(h.strength) > 0.0 and h.dir is Vector2))
+	expect(hazards_ok, "Arena hazards are slopes or wind with a strength and direction")
+
+
+func _bilingual(v: Variant) -> bool:
+	# every *_en has a non-empty *_ms twin and the other way round (strings, or the 3-entry journals)
+	if v is Array:
+		return v.all(func(x: Variant) -> bool: return _bilingual(x))
+	if not v is Dictionary:
+		return true
+	for k: String in v:
+		if k.ends_with("_en") or k.ends_with("_ms"):
+			var twin: Variant = v.get(k.left(-3) + ("_ms" if k.ends_with("_en") else "_en"))
+			var texts: Array = (v[k] + twin) if v[k] is Array and twin is Array else [v[k], twin]
+			if v[k] is Array and (not twin is Array or (v[k] as Array).size() != (twin as Array).size()):
+				return false
+			for text: Variant in texts:
+				if not text is String or (text as String).strip_edges().is_empty():
+					return false
+		elif not _bilingual(v[k]):
+			return false
+	return true
+
+
+func _check_story_flow() -> void:
+	# NEW JOURNEY: the shipwreck and Perlis on the kelir, the tutorial, the hub; travel, the
+	# journal reward card, Esc and the camera poses
+	game._load_workshop()
+	game._enter_state(game.State.READY)
+	game._on_single_player_pressed()
+	var beats: Array = game._cut_beats
+	expect(game.state == game.State.CUTSCENE and beats.size() == game.SD.PROLOGUE.size() + 4 and beats[0].kind == "wreck" and beats[-1].kind == "master" and game.current_arena == "perlis" and game.camera.transform.is_equal_approx(game._cam_base), "A new journey tells the shipwreck and Perlis's four beats, its arena set behind the kelir")
+	game._cutscene_finish()
+	game._cutscene_finish() # SKIP and the natural close can both land here: only the first leads on
+	var tutorial: bool = game.state == game.State.WIND and game.fight_kind == "tutorial" and game.story_seen == 0 and arena._tutorial_duel() and arena._ai_difficulty() == 0 and game._active_buffs().is_empty()
+	var others_teach: bool = false
+	for kind: String in ["local", "master"]:
+		game.fight_kind = kind
+		others_teach = others_teach or arena._tutorial_duel()
+	game.fight_kind = "tutorial"
+	expect(tutorial and not others_teach, "The arrival leads into the tutorial; only it (no village or master fight) teaches")
+	game._finish_duel(false)
+	game._after_round(false)
+	var hub_vista: bool = not game.camera.transform.is_equal_approx(game._cam_base) and game.camera.fov == game.VISTA_FOV
+	expect(game.state == game.State.HUB and game.tutorial_done and game.fight_kind == "" and game.duel_index == 0 and hub_vista and game.hub_panel.visible, "Won or lost, the tutorial leads to the Perlis hub in the vista pose")
+	game._on_hub_fight_pressed("local")
+	expect(game.state == game.State.CRAFT and game.camera.transform.is_equal_approx(game._cam_base) and is_equal_approx(game.camera.fov, game._cam_fov) and game.craft_panel.visible, "HUB -> CRAFT snaps back to the battle pose (workshop raycast, aim arrow, toasts)")
+	game._craft_back()
+	game._on_travel_pressed()
+	game._on_travel_pressed()
+	var unbeaten_shut: bool = game.story_index == 0 and game.state == game.State.HUB
+	game.defeated_masters.append("perlis")
+	game._on_travel_pressed()
+	game._on_travel_pressed()
+	var poor_shut: bool = game.story_index == 0 and game.coins == 0
+	var ride: Dictionary = game.MASTERS[0].transport
+	game.coins = int(ride.fare) + 5
+	game._on_travel_pressed() # the first press only asks to confirm
+	var asked: bool = game.story_index == 0 and game.coins == int(ride.fare) + 5
+	game._on_travel_pressed()
+	var first: Dictionary = game._cut_beats[0]
+	expect(unbeaten_shut and poor_shut and asked and game.story_index == 1 and game.coins == 5 and game.state == game.State.CUTSCENE and first.kind == "travel" and first.ride == ride.ride and first.art == ride.strip, "Travel is shut until the master falls and the fare is in hand, then takes a confirming press and rides on")
+	game._cutscene_finish()
+	expect(game.state == game.State.HUB and game.story_seen == 1 and game.current_arena == game.MASTERS[1].arena and game.local_pick == 0, "The ride ends in the next state's hub")
+	game._on_hub_fight_pressed("master")
+	game._on_fight_pressed()
+	game._finish_duel(true)
+	game._after_round(true)
+	expect(game.state == game.State.HUB and game.menus.is_open() and game.menus._stack.back() == "journal" and game.menus._journal_i == 1 and game._pending_journal == "", "A first master win opens their journal page as the reward card")
+	game.menus.close_pause()
+	game._hub_show("food")
+	game._on_escape()
+	var food_back: bool = game.state == game.State.HUB and game._hub_page == "main"
+	game._on_escape()
+	expect(food_back and game.state == game.State.READY and game.sp_button.text == game._t("sp_continue") % [game.MASTERS[1].region_en, 2, game.MASTERS.size()], "Esc steps back from the food stall, then leaves the hub for the title, which offers CONTINUE")
+	game._load_workshop()
+
+
+func _check_buffs() -> void:
+	# items of beaten states + the active dish, capped; story village and master fights only
+	game._load_workshop()
+	game.endless_mode = false
+	game.fight_kind = "local"
+	game.defeated_masters.append("perlis")
+	game.food_active = {"state": 0, "fights_left": 2}
+	var perlis: bool = game._active_buffs() == {"stab": 0.10, "regen": 0.6}
+	game.defeated_masters.clear()
+	var items: Dictionary = {}
+	var sums: Dictionary = {}
+	for m: Dictionary in game.MASTERS:
+		game.defeated_masters.append(m.id)
+		for k: String in m.item.buffs:
+			items[k] = float(items.get(k, 0.0)) + float(m.item.buffs[k])
+	var rendang: int = game.SD.STATE_IDS.find("nsembilan") # its dish's attack pushes the item sum past the cap
+	game.food_active = {"state": rendang, "fights_left": 1}
+	sums = items.duplicate()
+	for k: String in game.MASTERS[rendang].food.buffs:
+		sums[k] = float(sums.get(k, 0.0)) + float(game.MASTERS[rendang].food.buffs[k])
+	var all: Dictionary = game._active_buffs()
+	var summed: bool = all.size() == sums.size()
+	for k: String in sums:
+		summed = summed and is_equal_approx(float(all.get(k, -1.0)), minf(sums[k], game.SD.BUFF_CAPS[k]))
+	expect(perlis and summed, "Story buffs sum every beaten state's item and the active dish, each capped")
+	var shut: bool = true
+	for flag: String in ["net_active", "endless_mode"]:
+		game.set(flag, true)
+		shut = shut and game._active_buffs().is_empty()
+		game.set(flag, false)
+	for kind: String in ["tutorial", ""]:
+		game.fight_kind = kind
+		shut = shut and game._active_buffs().is_empty()
+	var mp: Dictionary = arena.sanitize_config({"slots": [{"style": "uri", "stats": {"buffs": {"atk": 9.0}}}]})
+	expect(shut and not mp.slots[0].stats.has("buffs"), "No buffs in the tutorial, Endless or MP (MP stats are rebuilt from STYLE_DEFS)")
+	# a dish lasts N fights, won or lost; a best-of-3 duel is one
+	game.story_index = 0
+	game.food_active = {"state": 0, "fights_left": 2}
+	game.fight_kind = "master"
+	game._finish_duel(true)
+	var one_left: bool = game.food_active.get("fights_left") == 1
+	game.fight_kind = "local"
+	game._finish_duel(false)
+	var items_only: bool = game._active_buffs().size() == items.size()
+	expect(one_left and game.food_active.is_empty() and items_only, "A dish counts down once per fight, won or lost, then runs out")
+	game._enter_state(game.State.READY)
+	# begin_wind: your story buffs ride on your tops, the master's on theirs; Endless gives you none
+	game.defeated_masters.clear()
+	game.defeated_masters.append("perlis")
+	game.story_index = 0
+	game.fight_kind = "local"
+	game.foe_gauge.title = "stale"
+	game._start_sp_fight()
+	var yours: bool = arena.top_at(1, 0).buffs == {"stab": 0.10} and arena.top_at(2, 0).buffs.is_empty()
+	expect(game.foe_gauge.title == arena.short_name(String(game._current_opponent().name), 18), "Before a rival top is up, the foe bar names this fight's opponent, never the last one")
+	game._enter_state(game.State.READY)
+	game._on_endless_pressed()
+	game._on_fight_pressed()
+	expect(yours and arena.top_at(1, 0).buffs.is_empty() and arena.top_at(2, 0).buffs.is_empty(), "Village fights carry your items; Endless never does (and lap-one masters fight without theirs)")
+	game._enter_state(game.State.READY)
+	game.endless_mode = false
+	# the mirror master copies your slot-1 battle stats and fields your reserves; knobs are cached
+	var ramlah: int = -1
+	for i: int in game.MASTERS.size():
+		if float(game.MASTERS[i].mirror) > 0.0:
+			ramlah = i
+	game.story_index = maxi(ramlah, 0)
+	game.defeated_masters.clear()
+	game.fight_kind = "master"
+	game.loadout.assign(["uri", "jantung", "uri"])
+	game._start_sp_fight()
+	var you: Dictionary = game._style_battle_stats(game.loadout[0])
+	var her: Gasing = arena.top_at(2, 0)
+	var scale: float = float(game.MASTERS[game.story_index].mirror)
+	var p2: Array = arena.participants[2].slots
+	expect(ramlah >= 0 and is_equal_approx(her.mass, you.mass * scale) and is_equal_approx(her.spin_reserve, you.spin_reserve * scale) and p2[1].style == "jantung" and p2[2].style == "uri" and arena.ai_think == float(game.MASTERS[ramlah].think), "The mirror master copies your slot-1 build and reserves")
+	game._enter_state(game.State.READY)
+	game._load_workshop()
+	game.fight_kind = ""
+	# arena seams: attack / defence change the hit
+	var lost: Array[float] = []
+	for pair: Array in [[{}, {}], [{"atk": 0.2}, {}], [{}, {"def": 0.2}]]:
+		fixture()
+		var a: Gasing = arena.top_at(1, 0)
+		var b: Gasing = arena.top_at(2, 0)
+		a.buffs = pair[0]
+		b.buffs = pair[1]
+		a.position = Vector3.ZERO
+		b.position = Vector3.RIGHT * (a.radius + b.radius)
+		a.control_velocity = Vector3.RIGHT * 2.0
+		var spin_before: float = b.spin
+		arena.collisions(0.01)
+		lost.append(spin_before - b.spin)
+	expect(lost[0] > 0.0 and is_equal_approx(lost[1], lost[0] * 1.2) and is_equal_approx(lost[2], lost[0] * 0.8), "Attack raises and defence cuts the spin a hit takes")
+	# timing: Kedah's charm makes a 77 launch PERFECT, for the local player only
+	fixture()
+	arena.participants[1].slots[1].stats.buffs = {"timing": 3.0}
+	arena.participants[2].slots[1].stats.buffs = {"timing": 3.0}
+	arena._deployed(arena.round_id, 1, 1, 77.0, 0.0)
+	var mine: bool = arena.last_launch_grade == "perfect" and is_equal_approx(arena.top_at(1, 1).launch_spin, arena.top_at(1, 1).spin_reserve * 0.95)
+	arena._deployed(arena.round_id, 2, 1, 77.0, 0.0)
+	expect(mine and int(arena.round_stats.get(2, {}).get("perfect", 0)) == 0 and is_equal_approx(game._wind_effectiveness(76.0, 76.0), 0.95) and game._wind_effectiveness(76.0) < 0.95, "Timing 3 grades a 77 launch PERFECT for you; the AI's band stays at 80")
+	var drained: Gasing = arena.top_at(1, 0)
+	drained.energy = 15.0
+	var short: String = arena._block_reason("dash")
+	drained.buffs = {"drain": 0.25}
+	expect(short == "energy" and arena._block_reason("dash") == "", "Drain lets a 15-energy dash through the HUD's own gate")
+	# hazards: drift scales with resistance and never rings a top out by itself; MP never has one
+	fixture()
+	arena.hazard = game.ARENA_DEFS.perak.hazard
+	var plain: Gasing = arena.top_at(1, 0)
+	var resist: Gasing = arena.top_at(2, 0)
+	resist.buffs = {"hazard": 0.5}
+	plain.position = Vector3(0.0, 0.0, 1.0)
+	resist.position = Vector3(0.0, 0.0, -1.0)
+	arena._hazard_tick(1.0)
+	var scaled: bool = plain.position.x > 0.0 and is_equal_approx(resist.position.x, plain.position.x * 0.5)
+	plain.position = Vector3(3.8, 0.0, 0.0)
+	arena._hazard_tick(1.0)
+	var rim_safe: bool = is_equal_approx(plain.position.x, 3.8)
+	fixture()
+	expect(scaled and rim_safe and arena.hazard.is_empty(), "Hazard drift falls with resistance, fades out at the rope, and MP / fixtures never carry it")
+	# tide: the surge is announced once as the ebb turns to flood
+	fixture()
+	var sink: ResultSink = ResultSink.new(game)
+	root.add_child(sink)
+	arena.game = sink
+	arena.ai_tide = 2.0
+	for t: float in [0.5, 1.9, 2.1, 3.0]:
+		arena.elapsed = t
+		arena._ai_tick(0.0)
+	expect(sink.calls.count("toast:" + game._t("tide_surge")) == 1, "A tide master's surge is announced once as the tide turns")
+	arena.game = game
+	sink.queue_free()
+	arena.reset()
+	# the telegraph: chevrons off the medallion on the push side; a wind's telegraph and gust add streaks
+	fixture()
+	arena.hazard = game.ARENA_DEFS.perak.hazard
+	arena._hazard_tick(0.0)
+	var chevrons: Node3D = arena._hazard_arrow.get_child(0)
+	var slope_shown: bool = arena._hazard_arrow.visible and (arena._hazard_arrow.transform * chevrons.position).is_equal_approx(Vector3(2.7, 0.02, 0.0)) and not arena._hazard_gust.emitting
+	arena.hazard = game.ARENA_DEFS.terengganu.hazard
+	arena.elapsed = float(arena.hazard.period) - 0.5 # inside the gust
+	arena._hazard_tick(0.0)
+	var gust_shown: bool = arena._hazard_arrow.visible and arena._hazard_gust.emitting and is_equal_approx(float(arena._hazard_mat.get_shader_parameter("alpha")), 0.9)
+	arena.elapsed = 1.0 # between gusts
+	arena._hazard_tick(0.0)
+	var calm: bool = not arena._hazard_arrow.visible and not arena._hazard_gust.emitting
+	arena.reset()
+	expect(slope_shown and gust_shown and calm and arena._hazard_arrow == null, "Hazard chevrons sit on the push side off the medallion; wind adds streaks only around its gust; the match teardown frees them")
+
+
+func _check_ending() -> void:
+	# the last master's fall mends the ship; the hub then waits on SAIL HOME / STAY
+	game._load_workshop()
+	game.unlocked_styles.append("pakdin")
+	for m: Dictionary in game.MASTERS.slice(0, -1):
+		game.defeated_masters.append(m.id)
+	game.story_index = game.MASTERS.size() - 1
+	game.story_seen = game.story_index
+	game.tutorial_done = true
+	game.endless_mode = false
+	game._enter_state(game.State.HUB)
+	game._on_hub_fight_pressed("master")
+	game._on_fight_pressed()
+	game._finish_duel(true)
+	game._after_round(true)
+	var mended: bool = game.state == game.State.CUTSCENE and game._cut_beats == game.SD.ENDING
+	game._cutscene_finish()
+	expect(mended and game.state == game.State.HUB and game._ending_pending() and game.menus.is_open(), "Beating the last master tells the ENDING, then the hub waits on the choice")
+	game.menus.close_pause()
+	game._enter_state(game.State.READY) # the game closed before the choice: CONTINUE tells the mending again
+	game._on_single_player_pressed()
+	var retold: bool = game.state == game.State.CUTSCENE and game._cut_beats == game.SD.ENDING
+	game._cutscene_finish()
+	expect(retold and game.state == game.State.HUB and game._ending_pending() and not game.journey_done, "CONTINUE before the ending choice retells the ship's mending, then the hub waits on it")
+	game._on_ending_choice(true)
+	var stay_told: bool = game.state == game.State.CUTSCENE and game._cut_beats == game.SD.EPILOGUE_STAY
+	game._cutscene_finish()
+	game._hub_show("dest")
+	var grid: bool = game.hub_list.find_children("*", "GridContainer", true, false).size() == 1
+	game._on_dest_pressed(3)
+	expect(stay_told and game.story_ending == "stay" and grid and game.story_index == 3 and game.state == game.State.HUB and game.current_arena == game.MASTERS[3].arena and not game._ending_pending(), "STAY: its epilogue, then free travel between every state")
+	var wallet: int = game.coins
+	game.story_ending = "" # back to the pending choice: this time sail home
+	game._on_ending_choice(false)
+	var home_told: bool = game.state == game.State.CUTSCENE and game._cut_beats == game.SD.EPILOGUE_HOME
+	game._cutscene_finish()
+	var titled: bool = game.state == game.State.READY and game.story_ending == "home" and game.sp_button.text == game._t("sp_new")
+	game._on_single_player_pressed()
+	expect(home_told and titled and game.story_index == 0 and game.defeated_masters.is_empty() and game.story_ending == "" and game.coins == wallet and wallet > 0 and game.unlocked_styles.has("pakdin") and game.state == game.State.CUTSCENE and game._cut_beats[0].kind == "wreck", "SAIL HOME: its epilogue, the title, and NEW JOURNEY restarts the story keeping coins and owned tops")
+	expect(game.journey_done and game._shop_gate("kl") == "" and game._shop_gate(String(game.MASTERS[5].mesh)) == "", "journey_done survives NEW JOURNEY: the KL top and every master's top stay on sale")
+	game._cutscene_finish()
+	game._enter_state(game.State.READY)
+	game._load_workshop()
+	game.fight_kind = ""
+
+
+func _check_food_stall() -> void:
+	# 13 dishes scroll inside the plaque, which still fits the 680 px hub column with BACK last;
+	# each dish shows its length and the first press says what it does; travel's reason shows under a dish
+	game._load_workshop()
+	game.endless_mode = false
+	for m: Dictionary in game.MASTERS:
+		game.defeated_masters.append(m.id)
+	game.story_index = game.MASTERS.size() - 1
+	game.story_seen = game.story_index
+	game.tutorial_done = true
+	game.story_ending = "stay"
+	game.food_active = {"state": 0, "fights_left": 2}
+	game._enter_state(game.State.HUB)
+	game._hub_show("food")
+	for _frame: int in 3:
+		await process_frame # containers sort and the info line wraps at its real width
+	var plaque: Control = game.hub_list.get_parent().get_parent()
+	var buttons: Array = game.hub_list.find_children("*", "Button", true, false)
+	var last: Dictionary = game.MASTERS[-1].food
+	var back: Node = game.hub_list.get_child(-1)
+	var listed: bool = buttons.size() == game.MASTERS.size() + 1 and buttons.all(func(b: Button) -> bool: return b.focus_mode == Control.FOCUS_NONE) \
+			and buttons.any(func(b: Button) -> bool: return b.text == game._t("hub_food_price") % [game._loc(last, "name"), int(last.price), int(last.fights)]) \
+			and back is Button and (back as Button).text == game._t("back")
+	expect(listed and plaque.get_combined_minimum_size().y <= 680.0, "The food stall's 13 dishes scroll: the page fits the 680 px hub column, BACK last, each dish with its length")
+	game.coins = 999
+	game._on_food_pressed(game.MASTERS.size() - 1)
+	expect(game.hub_info.text.ends_with(game._loc(last, "desc")) and game.coins == 999, "The first press on a dish shows what it does, before paying")
+	game.defeated_masters.assign(["perlis"])
+	game.story_ending = ""
+	game.story_index = 1
+	game._hub_show("main")
+	var travel: String = game._t("hub_travel") % [game._loc(game.MASTERS[2], "region").to_upper(), int(game.MASTERS[1].transport.fare)]
+	var shut: bool = game.hub_list.find_children("*", "Button", true, false).any(func(b: Button) -> bool: return b.text == travel and b.disabled)
+	expect(shut and game.hub_info.text.contains("\n") and game.hub_info.text.ends_with(game._t("hub_travel_locked") % String(game.MASTERS[1].name)), "A shut TRAVEL says why even under an active dish's line")
+	game._enter_state(game.State.READY)
+	game._load_workshop()

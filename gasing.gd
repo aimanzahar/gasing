@@ -58,6 +58,12 @@ var pending_elimination: String = ""
 var round_over: bool = false # result applied: still spinning on screen, but refuses every action
 var team_color: Color = Color(1.0, 0.8, 0.25)
 var is_local: bool = false
+# Story buffs (SP only, attached in arena.begin_wind; BUFF_CAPS keys). Empty = the base game
+# exactly: every hook below multiplies by 1.0 or adds 0.0.
+var buffs: Dictionary = {}
+var streak: int = 0 # consecutive landed hits (max 3); the streak buff turns it into speed
+var _streak_t: float = 0.0
+var _since_hit: float = 99.0
 
 var _spin_node: Node3D = null
 var _dir_arrow: Node3D = null
@@ -88,8 +94,11 @@ var _showcase: bool = false
 var _net_target: Vector3 = Vector3.ZERO
 var _has_net_target: bool = false
 
-# Shared across every top: one grain texture, one lathe-profile scan per mesh/band.
-static var _grain_normal: NoiseTexture2D = null
+# Shared across every top: one grain texture pair, one cross-section scan per mesh (all four level bands).
+const GRAIN_SCALE: Vector3 = Vector3(2.0, 0.9, 2.0) # tiles/unit; low on Y = streaks run up the sides
+const BAND_HEIGHT: float = 0.03 # level-band hoop height
+static var _grain_albedo: ImageTexture = null
+static var _grain_normal: ImageTexture = null
 static var _band_cache: Dictionary = {}
 
 @onready var _visual: Node3D = $Visual
@@ -109,6 +118,7 @@ func setup(p_name: String, p_shape: String, stats: Dictionary, p_accent: Color) 
 	level = clampi(int(stats.get("level", 1)), 1, 5)
 	accent_color = p_accent
 	mesh_id = String(stats.get("mesh", p_shape))
+	buffs = stats.get("buffs", {})
 	arcana = mesh_id == "kl"
 	radius = 0.56 if shape_id == "uri" else 0.44
 	_rng.randomize()
@@ -118,25 +128,48 @@ func setup(p_name: String, p_shape: String, stats: Dictionary, p_accent: Color) 
 func _build_visual() -> void:
 	for child: Node in _visual.get_children():
 		child.queue_free()
-	var packed: PackedScene = load("res://assets/gasing_%s.glb" % mesh_id)
-	if packed == null:
-		packed = load("res://assets/gasing_jantung.glb") # master GLB not produced yet
+	var path: String = "res://assets/gasing_%s.glb" % mesh_id
+	if not ResourceLoader.exists(path):
+		path = "res://assets/gasing_jantung.glb" # master GLB not produced yet
+	var packed: PackedScene = load(path)
 	var inst: Node3D = packed.instantiate() as Node3D
 	_visual.add_child(inst)
 	_spin_node = inst
 	_mesh = _find_mesh(inst)
+	# rebuilt tops carry their wood species on a "Body" slot 0; older GLBs keep the stock brown
+	var src: BaseMaterial3D = _mesh.get_active_material(0) as BaseMaterial3D if _mesh != null else null
 	_body_mat = StandardMaterial3D.new()
-	_body_mat.albedo_color = Color(0.42, 0.24, 0.11)
-	_body_mat.roughness = 0.62 - float(level - 1) * 0.075
+	_body_mat.albedo_color = src.albedo_color if src != null and src.resource_name == "Body" else Color(0.42, 0.24, 0.11)
+	_wood_grain()
+	# carved wood, not a toy: the grain lives in the colour (tinted by the species albedo) and in the normal
+	_body_mat.albedo_texture = _grain_albedo
 	_body_mat.normal_enabled = true
-	_body_mat.normal_texture = _wood_grain_normal()
+	_body_mat.normal_texture = _grain_normal
+	_body_mat.normal_scale = 0.3 # sanded wood: the grain is mostly colour, with a faint tactile edge
 	_body_mat.uv1_triplanar = true # lathe mesh has no UVs; project grain from local axes
-	_body_mat.uv1_scale = Vector3(2.4, 2.4, 2.4)
+	_body_mat.uv1_scale = GRAIN_SCALE
+	_body_mat.uv1_triplanar_sharpness = 6.0 # crisp hand-off between side streaks and crown figure
+	_body_mat.roughness = 0.7 - float(level - 1) * 0.0375 # oiled wood (0.70) that levels polish to 0.55
+	_body_mat.clearcoat_enabled = level > 1 # a thin wax sheen that grows with level, never a hard gloss
+	_body_mat.clearcoat = 0.035 * float(level - 1)
+	_body_mat.clearcoat_roughness = 0.55
 	_accent_mat = StandardMaterial3D.new()
-	_accent_mat.albedo_color = accent_color
+	# gilt trim: the UI accent darkened and pushed ~1.25x away from its grey, so gold reads as
+	# leaf on wood (~0.74, 0.54, 0.08), not cream icing; ring/label/arrow keep the bright accent
+	var lac: Color = accent_color.darkened(0.3)
+	var grey: float = lac.get_luminance()
+	_accent_mat.albedo_color = Color(grey, grey, grey).lerp(lac, 1.25).clamp()
+	_accent_mat.metallic = 0.4 # gilt, not chrome
+	_accent_mat.roughness = 0.45
+	_accent_mat.normal_enabled = true
+	_accent_mat.normal_texture = _grain_normal # paint over wood: the grain still telegraphs through
+	_accent_mat.normal_scale = 0.25
+	_accent_mat.uv1_triplanar = true
+	_accent_mat.uv1_scale = GRAIN_SCALE
+	_accent_mat.uv1_triplanar_sharpness = 6.0
 	_accent_mat.emission_enabled = true
 	_accent_mat.emission = accent_color
-	_accent_base = 0.5 # painted lacquer trim, not neon (flash spikes on hit)
+	_accent_base = 0.0 # trim, not a lamp: emission only shows when a hit flashes it
 	_accent_mat.emission_energy_multiplier = _accent_base
 	if _mesh != null:
 		_mesh.set_surface_override_material(0, _body_mat)
@@ -160,38 +193,54 @@ func _build_level_bands() -> void:
 	# Each earned level adds a visible lacquer band; no extra asset variants needed.
 	if _mesh == null or _mesh.mesh == null:
 		return
-	var vertices: PackedVector3Array = PackedVector3Array()
+	if level > 1 and not _band_cache.has(mesh_id):
+		_band_cache[mesh_id] = _band_hoops(_mesh.mesh, _mesh.get_aabb().end.y)
 	for i: int in range(level - 1):
-		var key: String = "%s:%d" % [mesh_id, i]
-		if not _band_cache.has(key):
-			if vertices.is_empty(): # surface_get_arrays copies the whole mesh; only pay it on a miss
-				vertices = _mesh.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-			_band_cache[key] = _band_profile(vertices, _mesh.get_aabb().end.y * (0.25 + float(i) * 0.1))
-		var profile: Vector2 = _band_cache[key] # x = height, y = radius (< 0: profile not found)
-		var band_radius: float = profile.y if profile.y >= 0.0 else radius
+		var hoop: Vector3 = _band_cache[mesh_id][i] # x = height, y/z = bottom/top rim radius (< 0: no geometry there)
 		var band: MeshInstance3D = MeshInstance3D.new()
-		var ring: TorusMesh = TorusMesh.new()
-		ring.inner_radius = maxf(band_radius - 0.005, 0.005)
-		ring.outer_radius = band_radius + 0.025
+		var ring: CylinderMesh = CylinderMesh.new() # open hoop just outside the widest geometry at both rims
+		ring.bottom_radius = (hoop.y if hoop.y >= 0.0 else radius) + 0.006
+		ring.top_radius = (hoop.z if hoop.z >= 0.0 else radius) + 0.006
+		ring.height = BAND_HEIGHT
+		ring.radial_segments = 96
+		ring.rings = 1
+		ring.cap_top = false
+		ring.cap_bottom = false
 		band.mesh = ring
 		band.material_override = _accent_mat
-		band.position.y = profile.x
+		band.position.y = hoop.x
 		_visual.add_child(band)
 
 
-static func _band_profile(vertices: PackedVector3Array, height: float) -> Vector2:
-	var below: Vector2 = Vector2(-INF, 0.0)
-	var above: Vector2 = Vector2(INF, 0.0)
-	# The imported tops are lathed meshes; interpolate their actual side profile.
-	for v: Vector3 in vertices:
-		var width: float = Vector2(v.x, v.z).length()
-		if v.y <= height and v.y >= below.x:
-			below = Vector2(v.y, maxf(width, below.y) if is_equal_approx(v.y, below.x) else width)
-		if v.y >= height and v.y <= above.x:
-			above = Vector2(v.y, maxf(width, above.y) if is_equal_approx(v.y, above.x) else width)
-	if not is_finite(below.x) or not is_finite(above.x):
-		return Vector2(height, -1.0)
-	return Vector2(height, lerpf(below.y, above.y, (height - below.x) / maxf(above.x - below.x, 0.001)))
+static func _band_hoops(mesh: Mesh, top_y: float) -> Array[Vector3]:
+	# Widest cross-section of every surface at each band's two rims: the farthest triangle-edge crossing.
+	# Vertex rows alone miss carved grooves (one face spans several rows), so flute ridges poked through.
+	var heights: PackedFloat32Array = PackedFloat32Array()
+	for i: int in 4:
+		var h: float = top_y * (0.25 + float(i) * 0.1)
+		heights.append_array([h - BAND_HEIGHT * 0.5, h + BAND_HEIGHT * 0.5])
+	var radii: PackedFloat32Array = PackedFloat32Array()
+	radii.resize(heights.size())
+	radii.fill(-1.0)
+	for s: int in mesh.get_surface_count():
+		var arrays: Array = mesh.surface_get_arrays(s)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array(range(v.size()))
+		for t: int in range(0, idx.size() - 2, 3):
+			for e: int in 3:
+				var a: Vector3 = v[idx[t + e]]
+				var b: Vector3 = v[idx[t + (e + 1) % 3]]
+				if a.y == b.y or maxf(a.y, b.y) < heights[0] or minf(a.y, b.y) > heights[-1]:
+					continue
+				for k: int in heights.size():
+					var f: float = (heights[k] - a.y) / (b.y - a.y)
+					if f >= 0.0 and f <= 1.0:
+						var p: Vector3 = a.lerp(b, f)
+						radii[k] = maxf(radii[k], Vector2(p.x, p.z).length())
+	var hoops: Array[Vector3] = []
+	for i: int in 4:
+		hoops.append(Vector3((heights[i * 2] + heights[i * 2 + 1]) * 0.5, radii[i * 2], radii[i * 2 + 1]))
+	return hoops
 
 
 func _build_action_visuals() -> void:
@@ -333,18 +382,40 @@ func flash_direction(dir: Vector3) -> void:
 	_arrow_tween.tween_callback(_dir_arrow.hide)
 
 
-static func _wood_grain_normal() -> NoiseTexture2D:
-	if _grain_normal != null:
-		return _grain_normal
+static func _wood_grain() -> void:
+	# One seamless tile, built synchronously once (no async NoiseTexture2D pop-in): gently swept straight
+	# grain (dark latewood lines of varying strength on light earlywood) plus fine pore lines. Triplanar with
+	# GRAIN_SCALE puts long streaks up the sides and plank figure across the crown. Height = brightness.
+	if _grain_albedo != null:
+		return
 	var n: FastNoiseLite = FastNoiseLite.new()
 	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	n.frequency = 0.9
-	_grain_normal = NoiseTexture2D.new()
-	_grain_normal.noise = n
-	_grain_normal.seamless = true
-	_grain_normal.as_normal_map = true
-	_grain_normal.bump_strength = 1.1
-	return _grain_normal
+	n.frequency = 0.0045 # about one sweep per tile: neighbouring rings bend together, like real figure
+	n.fractal_octaves = 2
+	n.seed = 11
+	var size: int = 256
+	var warp: PackedByteArray = n.get_seamless_image(size, size).get_data() # L8, normalized
+	var data: PackedByteArray = PackedByteArray()
+	data.resize(size * size)
+	for y: int in size:
+		for x: int in size:
+			var w: float = float(warp[y * size + x]) / 255.0 - 0.5
+			var u: float = float(x) / float(size)
+			var t: float = u * 14.0 + w * 1.0 # 14 growth rings per tile, gently swept
+			var k: int = posmod(int(floor(t)), 14) # each ring its own strength, like real wood
+			var late: float = 1.0 - smoothstep(0.0, 0.3, absf(fposmod(t, 1.0) - 0.5) * 2.0)
+			var pore: float = float(fposmod(u * 53.0 + w * 3.8, 1.0) > 0.86)
+			# symmetric dark latewood lines (a sawtooth ramp would read as lit ridges, i.e. rippled sand)
+			var v: float = (0.95 + 0.10 * w) * (1.0 - (0.18 + 0.03 * float((k * 7) % 5)) * late) - 0.05 * pore
+			data[y * size + x] = int(clampf(v, 0.0, 1.0) * 255.0)
+	var img: Image = Image.create_from_data(size, size, false, Image.FORMAT_L8, data)
+	img.convert(Image.FORMAT_RGBA8)
+	var bump: Image = img.duplicate() as Image
+	img.generate_mipmaps()
+	_grain_albedo = ImageTexture.create_from_image(img)
+	bump.bump_map_to_normal_map(1.5)
+	bump.generate_mipmaps()
+	_grain_normal = ImageTexture.create_from_image(bump)
 
 
 func _find_mesh(node: Node) -> MeshInstance3D:
@@ -431,29 +502,29 @@ func steer(direction: Vector3, delta: float) -> void:
 	if dir == Vector3.ZERO or dash_time > 0.0 or rushing:
 		return
 	_steering = true
-	control_velocity = control_velocity.move_toward(dir * MOVE_SPEED, MOVE_ACCELERATION * delta)
+	control_velocity = control_velocity.move_toward(dir * MOVE_SPEED * speed_mult(), MOVE_ACCELERATION * delta)
 
 
 func nudge(dir: Vector3) -> bool:
 	var flat: Vector3 = _flat_direction(dir)
 	if not _can_act() or nudge_cd > 0.0 or flat == Vector3.ZERO or dash_time > 0.0:
 		return false
-	nudge_cd = 0.35
-	control_velocity = flat * MOVE_SPEED
+	nudge_cd = 0.35 * (1.0 - buff("combo"))
+	control_velocity = flat * MOVE_SPEED * speed_mult()
 	flash_direction(flat)
 	return true
 
 
 func dash(dir: Vector3) -> bool:
 	var flat: Vector3 = _flat_direction(dir)
-	if not _can_act() or dash_cd > 0.0 or energy < DASH_COST or flat == Vector3.ZERO:
+	if not _can_act() or dash_cd > 0.0 or energy < cost(DASH_COST) or flat == Vector3.ZERO:
 		return false
-	energy -= DASH_COST
-	dash_cd = 1.0
+	energy -= cost(DASH_COST)
+	dash_cd = 1.0 * (1.0 - buff("combo"))
 	dash_time = DASH_DURATION
 	_dash_direction = flat
 	rushing = false
-	control_velocity = flat * 5.0
+	control_velocity = flat * 5.0 * speed_mult()
 	flash_direction(flat)
 	return true
 
@@ -466,9 +537,9 @@ func set_rush(on: bool, dir: Vector3) -> void:
 
 
 func jump() -> bool:
-	if not _can_act() or jump_cd > 0.0 or energy < JUMP_COST or _launch_time > 0.0:
+	if not _can_act() or jump_cd > 0.0 or energy < cost(JUMP_COST) or _launch_time > 0.0:
 		return false
-	energy -= JUMP_COST
+	energy -= cost(JUMP_COST)
 	jump_cd = 2.5
 	jump_time = JUMP_DURATION
 	rushing = false
@@ -507,6 +578,23 @@ func motion_velocity() -> Vector3:
 	return velocity + control_velocity
 
 
+func buff(k: String) -> float:
+	return float(buffs.get(k, 0.0))
+
+
+func speed_mult() -> float:
+	return 1.0 + buff("speed") + buff("streak") * streak
+
+
+func cost(base: float) -> float:
+	return base * (1.0 - buff("drain"))
+
+
+func topple_spin() -> float:
+	# the one topple line: the arena's elimination check reads it too
+	return 0.08 * launch_spin * (1.0 - buff("stab"))
+
+
 func launch(dir: Vector3, effectiveness: float) -> void:
 	if not dir.is_finite() or not is_finite(effectiveness):
 		return
@@ -535,12 +623,33 @@ func launch(dir: Vector3, effectiveness: float) -> void:
 		tw.tween_property(self, "scale", Vector3.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
-func apply_hit(push_dir: Vector3, impulse: float, spin_penalty: float) -> void:
+func apply_hit(push_dir: Vector3, impulse: float, spin_penalty: float) -> bool:
+	# returns true when luck halved the spin damage
 	if not _can_act() or not push_dir.is_finite() or not is_finite(impulse) or not is_finite(spin_penalty):
-		return
-	velocity += _flat_direction(push_dir) * maxf(impulse, 0.0)
-	spin = maxf(spin - maxf(spin_penalty, 0.0), 0.0)
+		return false
+	velocity += _flat_direction(push_dir) * maxf(impulse, 0.0) * (1.0 - buff("stab"))
+	var lucky: bool = take_spin(spin_penalty)
 	flash_accent()
+	return lucky
+
+
+func take_spin(amount: float, grind: bool = false) -> bool:
+	# Spin damage through def / repeat (rush grind or a hit within 1.2 s) / luck (halves one
+	# collision), floored at 30%; returns lucky. _rng is only drawn when luck > 0.
+	var m: float = 1.0 - buff("def")
+	if grind or _since_hit < 1.2:
+		m -= buff("repeat")
+	var lucky: bool = not grind and buff("luck") > 0.0 and _rng.randf() < buff("luck")
+	if lucky:
+		m *= 0.5
+	_since_hit = 0.0
+	spin = maxf(spin - maxf(amount, 0.0) * maxf(m, 0.3), 0.0)
+	return lucky
+
+
+func on_hit_landed() -> void:
+	streak = mini(streak + 1, 3)
+	_streak_t = 2.5 * (1.0 + buff("combo"))
 
 
 func flash_accent() -> void:
@@ -706,17 +815,23 @@ func _set_net_target(target: Vector3) -> void:
 
 func _tick_actions(delta: float) -> void:
 	rush_paid_seconds = 0.0
+	energy = minf(energy + buff("regen") * delta, 100.0) # energy never exceeds 100: a no-op without regen
+	_since_hit += delta
+	if _streak_t > 0.0:
+		_streak_t -= delta
+		if _streak_t <= 0.0:
+			streak = 0
 	dash_cd = maxf(dash_cd - delta, 0.0)
 	jump_cd = maxf(jump_cd - delta, 0.0)
 	nudge_cd = maxf(nudge_cd - delta, 0.0)
 	if dash_time > 0.0:
 		dash_time = maxf(dash_time - delta, 0.0)
-		control_velocity = _dash_direction * (5.0 if dash_time > 0.0 else MOVE_SPEED)
+		control_velocity = _dash_direction * (5.0 if dash_time > 0.0 else MOVE_SPEED) * speed_mult()
 	elif rushing:
-		var paid_time: float = minf(delta, energy / RUSH_COST_PER_SECOND)
+		var paid_time: float = minf(delta, energy / cost(RUSH_COST_PER_SECOND))
 		rush_paid_seconds = paid_time
-		energy = maxf(energy - RUSH_COST_PER_SECOND * paid_time, 0.0)
-		control_velocity = control_velocity.move_toward(rush_direction * RUSH_SPEED, MOVE_ACCELERATION * paid_time)
+		energy = maxf(energy - cost(RUSH_COST_PER_SECOND) * paid_time, 0.0)
+		control_velocity = control_velocity.move_toward(rush_direction * RUSH_SPEED * speed_mult(), MOVE_ACCELERATION * paid_time)
 		if energy <= 0.0:
 			rushing = false
 	elif not _steering:
@@ -750,22 +865,23 @@ func _physics_process(delta: float) -> void:
 		return
 	var dash_seconds: float = minf(delta, dash_time)
 	_tick_actions(delta)
-	spin = maxf(spin - SPIN_DECAY * delta, 0.0)
+	# endure: a wobbling top bleeds spin slower (wobble is last tick's)
+	spin = maxf(spin - SPIN_DECAY * (1.0 - (buff("endure") if wobble > 0.0 else 0.0)) * delta, 0.0)
 	var wobble_threshold: float = 0.25 * launch_spin
-	var topple_threshold: float = 0.08 * launch_spin
+	var topple_threshold: float = topple_spin()
 	if spin < wobble_threshold:
 		wobble = clampf((wobble_threshold - spin) / maxf(wobble_threshold - topple_threshold, 0.001), 0.0, 1.0)
 	else:
 		wobble = 0.0
 	if wobble > 0.0:
 		var drift_ang: float = _rng.randf_range(0.0, TAU)
-		velocity += Vector3(cos(drift_ang), 0.0, sin(drift_ang)) * wobble * 2.0 * delta
+		velocity += Vector3(cos(drift_ang), 0.0, sin(drift_ang)) * wobble * 2.0 * (1.0 - buff("stab")) * delta
 	velocity = velocity.move_toward(Vector3.ZERO, MOMENTUM_DRAG * delta)
 	var motion: Vector3 = motion_velocity()
 	var travel: Vector3 = motion * delta
 	if dash_seconds > 0.0 and dash_time <= 0.0:
 		# The final tick contains both dash speed and normal speed.
-		travel += _dash_direction * (5.0 - MOVE_SPEED) * dash_seconds
+		travel += _dash_direction * (5.0 - MOVE_SPEED) * speed_mult() * dash_seconds
 	position.x += travel.x
 	position.z += travel.z
 	var flat: Vector2 = Vector2(position.x, position.z)
@@ -859,6 +975,11 @@ func _update_label() -> void:
 
 static func run_action_checks() -> bool:
 	# Runnable without a scene: load("res://gasing.gd").run_action_checks().
+	var cone: CylinderMesh = CylinderMesh.new() # y -1..1, radius 0.4 -> 0.2
+	cone.top_radius = 0.2
+	cone.bottom_radius = 0.4
+	var hoop: Vector3 = _band_hoops(cone, 1.0)[0]
+	assert(absf(hoop.y - (0.3 - 0.1 * (hoop.x - BAND_HEIGHT * 0.5))) < 0.001 and hoop.z < hoop.y, "Level-band rims follow the profile slope")
 	var top: Gasing = Gasing.new()
 	top.launch(Vector3.FORWARD, 0.75)
 	assert(is_equal_approx(top.energy, 75.0))
@@ -961,4 +1082,56 @@ static func run_action_checks() -> bool:
 	ender.flash_accent()
 	assert(is_equal_approx(ender._accent_mat.emission_energy_multiplier, 1.2), "Flash settles on the stored base glow (arcana keeps 1.2)")
 	ender.free()
+	# Story buff seams. Everything above ran with empty buffs, which must be the base game exactly.
+	var b: Gasing = Gasing.new()
+	b.launch(Vector3.FORWARD, 1.0)
+	assert(b.speed_mult() == 1.0 and b.cost(DASH_COST) == DASH_COST and b.topple_spin() == 0.08 * b.launch_spin, "Empty buffs are neutral")
+	assert(not b.take_spin(10.0) and b.spin == b.launch_spin - 10.0, "Unbuffed spin damage lands in full")
+	b.buffs = {"stab": 0.2}
+	b.velocity = Vector3.ZERO
+	b.apply_hit(Vector3.RIGHT, 1.0, 0.0)
+	assert(is_equal_approx(b.topple_spin(), 0.064 * b.launch_spin) and is_equal_approx(b.velocity.x, 0.8), "Stability topples later and softens knockback")
+	b.buffs = {"regen": 2.0}
+	b.energy = 99.5
+	b._tick_actions(1.0)
+	assert(b.energy == 100.0, "Regen refills energy, capped at 100")
+	b.buffs = {"drain": 0.25}
+	b.energy = 15.0
+	assert(b.dash(Vector3.RIGHT) and is_zero_approx(b.energy), "Drain makes a dash cost 15")
+	b.buffs = {"combo": 0.2, "speed": 0.1}
+	b.energy = 100.0
+	b.dash_cd = 0.0
+	assert(b.dash(Vector3.RIGHT) and is_equal_approx(b.dash_cd, 0.8) and is_equal_approx(b.control_velocity.x, 5.5), "Combo shortens the dash cooldown; speed quickens the dash")
+	b.dash_time = 0.0
+	assert(b.nudge(Vector3.LEFT) and is_equal_approx(b.nudge_cd, 0.28) and is_equal_approx(b.control_velocity.x, -MOVE_SPEED * 1.1), "Combo and speed reach the nudge")
+	b.buffs = {"streak": 0.05, "combo": 0.2}
+	for i: int in 4:
+		b.on_hit_landed()
+	assert(b.streak == 3 and is_equal_approx(b.speed_mult(), 1.15), "A hit streak adds speed, capped at 3 hits")
+	b._tick_actions(2.9)
+	var held: bool = b.streak == 3
+	b._tick_actions(0.2)
+	assert(held and b.streak == 0, "The streak lapses after its combo-lengthened 3 s window")
+	b.buffs = {"endure": 0.5}
+	b.spin = 10.0
+	b.wobble = 0.5
+	b.position = Vector3.ZERO
+	b.velocity = Vector3.ZERO
+	b.control_velocity = Vector3.ZERO
+	b._physics_process(1.0)
+	assert(is_equal_approx(b.spin, 10.0 - SPIN_DECAY * 0.5) and b.pending_elimination.is_empty(), "Endure slows spin decay while wobbling")
+	b.buffs = {"def": 0.2, "repeat": 0.3}
+	b.spin = 50.0
+	b._since_hit = 99.0
+	b.take_spin(10.0)
+	b.take_spin(10.0)
+	assert(is_equal_approx(b.spin, 37.0), "Defence cuts every hit; repeat also cuts a hit within 1.2 s of the last")
+	b.buffs = {"def": 0.5, "repeat": 0.3}
+	b._since_hit = 99.0
+	b.take_spin(10.0, true)
+	assert(is_equal_approx(b.spin, 34.0), "The rush grind always takes repeat; the damage floor is 30%")
+	b.buffs = {"luck": 1.0}
+	b._since_hit = 99.0
+	assert(b.take_spin(10.0) and is_equal_approx(b.spin, 29.0) and not b.take_spin(10.0, true), "Luck halves a collision's damage, never the grind's")
+	b.free()
 	return true

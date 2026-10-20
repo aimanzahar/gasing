@@ -1,12 +1,13 @@
 extends Node
-# Pause / settings / how-to-play / credits overlay. One full-rect overlay under
-# game.ui with a page stack (pause -> settings/howto/credits -> BACK). Pages are
-# rebuilt on every open so the language is always current. Runs while the tree
+# Pause / settings / how-to-play / credits / journal overlay. One full-rect overlay
+# under game.ui with a page stack (pause -> settings/howto/journal -> BACK). Pages
+# are rebuilt on every open so the language is always current. Runs while the tree
 # is paused (PROCESS_MODE_ALWAYS + TWEEN_PAUSE_PROCESS tweens).
 
 signal closed # the overlay was dismissed (the how-to offer before the first fight waits on it)
 
 const HT = preload("res://scripts/heritage_theme.gd")
+const SD = preload("res://scripts/story_data.gd")
 const SETTINGS_PATH: String = "user://settings.cfg"
 const BUSES: Array[String] = ["Master", "Music", "SFX"]
 
@@ -25,10 +26,16 @@ var _paused_by_me: bool = false
 var _gfx_orig: Dictionary = {} # env/sun values captured before low graphics, restored on off
 var _fs_check: CheckButton = null
 var _close_text: String = "" # label for the lone page's close button (e.g. "GOT IT — FIGHT!")
+var _journal_i: int = 0 # journal page = index into SD.MASTERS
 
 
 func _tr(en: String, ms: String) -> String:
 	return ms if game.lang == "ms" else en
+
+
+func _loc(d: Dictionary, field: String) -> Variant:
+	# story_data's per-language fields: d[field_<lang>], falling back to English
+	return d.get(field + "_" + game.lang, d.get(field + "_en", ""))
 
 
 func build() -> void:
@@ -174,9 +181,12 @@ func close_pause() -> void:
 		closed.emit()
 
 
-func show_info(kind: String, close_text: String = "") -> void:
-	if not kind in ["settings", "howto", "credits"]:
+func show_info(kind: String, close_text: String = "", focus_id: String = "") -> void:
+	if not kind in ["settings", "howto", "credits", "journal"]:
 		return
+	if kind == "journal": # open on the asked state, else the one the sailor is in
+		var i: int = SD.STATE_IDS.find(focus_id)
+		_journal_i = i if i >= 0 else clampi(int(game.story_index), 0, SD.STATE_IDS.size() - 1)
 	if _stack.is_empty():
 		_close_text = close_text
 		if kind == "howto":
@@ -224,6 +234,8 @@ func _render() -> void:
 			_page = _build_settings()
 		"howto":
 			_page = _build_howto()
+		"journal":
+			_page = _build_journal()
 		_:
 			_page = _build_credits()
 	_center.add_child(_page)
@@ -247,6 +259,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return # mouse falls to the dimmer
 	elif key.keycode == KEY_F11 and key.pressed and not key.echo:
 		toggle_fullscreen() # main may be paused under us
+	elif _stack.back() == "journal" and key.pressed and not key.echo and (key.keycode == KEY_LEFT or key.keycode == KEY_RIGHT):
+		_journal_flip(1 if key.keycode == KEY_RIGHT else -1)
 	# modal: swallow keys so ENTER/SPACE don't start or steer anything underneath (MP isn't paused)
 	get_viewport().set_input_as_handled()
 
@@ -337,11 +351,24 @@ func _build_pause() -> Control:
 	col.add_child(howto)
 	var settings: Button = game._mk_button(_tr("SETTINGS", "TETAPAN"), game.WOOD_AMBER)
 	settings.pressed.connect(show_info.bind("settings"))
-	col.add_child(settings)
-	# SP campaign: leaving mid-duel forfeits it (game._forfeit_duel), and the button says so
-	var campaign: bool = not game.net_active and not game.endless_mode
+	settings.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# the story journal shares the settings row, so the card stays clear of the clock medallion
+	var settings_row: HBoxContainer = HBoxContainer.new()
+	settings_row.add_theme_constant_override("separation", 10)
+	settings_row.add_child(settings)
+	col.add_child(settings_row)
+	var hub: bool = game.state == game.State.HUB
+	var story: bool = not game.net_active and not game.endless_mode and (game.fight_kind != "" or hub)
+	if story:
+		var journal: Button = game._mk_button(_tr("JOURNAL", "JURNAL"), game.WOOD_AMBER)
+		journal.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		journal.pressed.connect(show_info.bind("journal"))
+		settings_row.add_child(journal)
+	# story fight: leaving forfeits it (game._forfeit_duel: a lost fight, back to the village
+	# hub, progress kept); from the hub itself it's the way out to the title
+	var story_fight: bool = story and not hub
 	var leave_text: String = _tr("LEAVE MATCH", "TINGGALKAN PERLAWANAN") if game.net_active \
-		else (_tr("FORFEIT DUEL", "TARIK DIRI") if campaign else _tr("MAIN MENU", "MENU UTAMA"))
+		else (_tr("BACK TO VILLAGE", "KEMBALI KE KAMPUNG") if story_fight else _tr("MAIN MENU", "MENU UTAMA"))
 	var leave: Button = game._mk_button(leave_text, game.WOOD_DARK, true)
 	leave.add_theme_color_override("font_color", game.DANGER)
 	leave.add_theme_color_override("font_hover_color", game.DANGER.lightened(0.2))
@@ -349,9 +376,9 @@ func _build_pause() -> Control:
 	col.add_child(leave)
 	if game.net_active:
 		v.add_child(game._mk_label(_tr("The match keeps running", "Perlawanan masih berjalan"), 13, game.CREAM_MUTED))
-	elif campaign:
-		v.add_child(game._mk_label(_tr("Forfeiting counts as a lost duel: the story starts over",
-			"Tarik diri dikira kalah duel: cerita bermula semula"), 13, game.CREAM_MUTED))
+	elif story_fight:
+		v.add_child(game._mk_label(_tr("Leaving counts as a lost fight: your journey is kept",
+			"Keluar dikira kalah: kemajuan pengembaraanmu tetap disimpan"), 13, game.CREAM_MUTED))
 	v.add_child(game._mk_divider())
 	# compact controls reminder
 	var rows: Array = [
@@ -377,7 +404,7 @@ func _on_leave_pressed() -> void:
 	if mp:
 		game._net_teardown()
 	else:
-		game._forfeit_duel() # campaign: counts as a lost duel; endless: back to the title
+		game._forfeit_duel() # story fight: a lost fight, back to the hub; otherwise back to the title
 
 
 # ---------------------------------------------------------------- settings
@@ -479,24 +506,25 @@ func _build_howto() -> Control:
 			[["A", "D"], key, _tr("Aim the throw", "Halakan balingan")],
 		]],
 		[2, _tr("FIGHT", "BERTARUNG"), [
-			[["W", "A", "S", "D"], key, _tr("Steer your selected gasing", "Kemudi gasing pilihan anda")],
+			[["W", "A", "S", "D"], key, _tr("Steer your selected gasing", "Kemudi gasing pilihanmu")],
 			[[_tr("CLICK", "KLIK")], key, _tr("Free push toward the cursor", "Tolakan percuma ke arah kursor")],
 			[["SHIFT"], key, _tr("Dash - 20 energy, 1 s cooldown", "Pecut - 20 tenaga, rehat 1 s")],
 			[["E"], key, _tr("Hold to rush the cursor - 20 energy/s, drains enemy spin on contact", "Tahan untuk meluru - 20 tenaga/s, menyedut putaran lawan bila bersentuh")],
 			[["SPACE"], key, _tr("Jump to dodge - 25 energy", "Lompat untuk mengelak - 25 tenaga")],
-			[["!"], red, _tr("Energy never refills - spend it wisely", "Tenaga tidak diisi semula - guna dengan bijak")],
+			[["!"], red, _tr("Energy only refills with certain foods and items - spend it wisely", "Tenaga hanya pulih dengan juadah atau barang tertentu - guna dengan bijak")],
 		]],
 		[3, _tr("SQUAD", "PASUKAN"), [
-			[["1", "2", "3"], key, _tr("You field three gasing - select one", "Anda turunkan tiga gasing - pilih satu")],
+			[["1", "2", "3"], key, _tr("You field three gasing - select one", "Kamu turunkan tiga gasing - pilih satu")],
 			[["SPACE"], key, _tr("Select a reserve, hold and release to launch it anywhere mid-fight", "Pilih simpanan, tahan dan lepas untuk melancarnya di mana-mana")],
 			[["30s", "45s"], gold, _tr("Reserves auto-launch weakly at 30 s and 45 s", "Simpanan dilancar sendiri (lemah) pada 30 s dan 45 s")],
-			[["5s"], red, _tr("Nothing of yours spinning? You get 5 s to launch", "Tiada gasing anda berpusing? Ada 5 s untuk melancar")],
+			[["5s"], red, _tr("Nothing of yours spinning? You get 5 s to launch", "Tiada gasingmu yang berpusing? Ada 5 s untuk melancar")],
 		]],
 		[4, _tr("WIN", "MENANG"), [
 			[["OUT"], gold, _tr("Ring-out: knock every enemy gasing over the rim", "Keluar gelanggang: tolak setiap gasing lawan melepasi bibir")],
 			[["0%"], gold, _tr("Topple: or outlast them until their spin runs out", "Tumbang: atau bertahan hingga putaran mereka habis")],
 			[["90s"], gold, _tr("At 90 s more spinning gasing wins, then more spin", "Pada 90 s gasing berpusing terbanyak menang, kemudian putaran tertinggi")],
-			[["2/3"], gold, _tr("Each master duel is best of 3 rounds", "Setiap duel mahaguru ialah terbaik 3 pusingan")],
+			[["2/3"], gold, _tr("Masters: best of 3 rounds · village matches: 1 round", "Mahaguru: terbaik daripada 3 pusingan · kampung: 1 pusingan")],
+			[["+"], gold, _tr("Master items buff you for good · stall food for a few fights", "Barang mahaguru: kelebihan kekal · makanan gerai: sementara")],
 		]],
 	]
 	var grid: GridContainer = GridContainer.new()
@@ -563,6 +591,122 @@ func _draw_howto_art(c: Control, card: int) -> void:
 					p + Vector2(0.0, 9.0), p + Vector2(-8.0, 0.0)]), HT.SIDE_FOE if i == 2 else HT.SIDE_YOU)
 
 
+# ---------------------------------------------------------------- journal
+
+func _build_journal() -> Control:
+	# one state per page: a beaten master's knowledge, item and food; the rest stay "???"
+	var v: VBoxContainer = _page_box(false, 14.0) # breathing room: the arrows and text would touch the gold frame line
+	_header(v, _tr("JOURNAL", "JURNAL"), 30.0)
+	var m: Dictionary = SD.MASTERS[_journal_i]
+	var beaten: bool = game.defeated_masters.has(String(m.id))
+	var region: String = String(_loc(m, "region"))
+	var nav: HBoxContainer = HBoxContainer.new()
+	nav.add_theme_constant_override("separation", 12)
+	v.add_child(nav)
+	# page arrows as plain-text plaques, like the workshop carousel (Signika has no triangle glyphs)
+	var prev: Button = game._mk_button("<", game.WOOD_DARK, true)
+	var next: Button = game._mk_button(">", game.WOOD_DARK, true)
+	for b: Button in [prev, next]:
+		b.add_theme_font_size_override("font_size", 30)
+		b.custom_minimum_size = Vector2(56.0, 56.0)
+		b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	prev.disabled = _journal_i == 0
+	next.disabled = _journal_i == SD.MASTERS.size() - 1
+	prev.pressed.connect(_journal_flip.bind(-1))
+	next.pressed.connect(_journal_flip.bind(1))
+	var head: VBoxContainer = VBoxContainer.new()
+	head.add_theme_constant_override("separation", 0)
+	head.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(game._mk_title(region, 30))
+	head.add_child(game._mk_label("%s  ·  %d / %d" % [String(m.name) if beaten else "???", _journal_i + 1, SD.MASTERS.size()],
+		15, game.CREAM_MUTED))
+	nav.add_child(prev)
+	nav.add_child(head)
+	nav.add_child(next)
+	var scroll: ScrollContainer = ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(640.0, 300.0) # fixed, so flipping pages never resizes the card
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	v.add_child(scroll)
+	var body: VBoxContainer = VBoxContainer.new()
+	body.add_theme_constant_override("separation", 6)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(body)
+	if not beaten:
+		body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		body.alignment = BoxContainer.ALIGNMENT_CENTER
+		body.add_child(game._mk_title("???", 64, HT.TEXT_DIM))
+		var hint: Label = game._mk_label(_tr("Beat the gasing master of %s to fill this page",
+			"Kalahkan mahaguru gasing %s untuk mengisi halaman ini") % region, 15, game.CREAM_MUTED)
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		body.add_child(hint)
+	else:
+		body.add_child(_journal_gift("item", m)) # first, so the reward card opens on what was won
+		body.add_child(_journal_gift("food", m))
+		body.add_child(game._mk_divider())
+		var heads: Array[String] = [_tr("HISTORY", "SEJARAH"), _tr("TRADITION", "TRADISI"), _tr("FOOD", "MAKANAN")]
+		var paras: Array = _loc(m, "journal")
+		for i: int in mini(paras.size(), heads.size()):
+			var t: Label = game._mk_title(heads[i], 20)
+			t.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+			body.add_child(t)
+			var p: Label = _left_label(String(paras[i]), 15, game.CREAM_MUTED)
+			p.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			body.add_child(p)
+	var won: int = 0
+	for id: String in SD.STATE_IDS:
+		won += 1 if game.defeated_masters.has(id) else 0
+	v.add_child(game._mk_label(_tr("Masters beaten: %d / %d", "Mahaguru ditewaskan: %d / %d") % [won, SD.STATE_IDS.size()],
+		13, game.CREAM_MUTED))
+	_add_back_button(v)
+	return v.get_parent() as Control
+
+
+func _journal_gift(kind: String, m: Dictionary) -> HBoxContainer:
+	# the item / food row: its icon (when the PNG exists), what it is, its effect; food adds price and length
+	var d: Dictionary = m.get(kind, {})
+	var h: HBoxContainer = HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	var path: String = "res://assets/ui/icon_%s_%s.png" % [kind, m.id]
+	if ResourceLoader.exists(path):
+		var icon: TextureRect = TextureRect.new()
+		icon.texture = load(path)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.custom_minimum_size = Vector2(112.0, 112.0) # big enough to read the carving and the dish
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		h.add_child(icon)
+	var col: VBoxContainer = VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER # the text sits mid-icon
+	h.add_child(col)
+	col.add_child(_left_label(_tr("TRADITIONAL ITEM · permanent", "BARANG TRADISIONAL · kekal") if kind == "item"
+		else _tr("LOCAL FOOD · temporary", "MAKANAN TEMPATAN · sementara"), 12, game.CREAM_MUTED))
+	var title: Label = game._mk_title(String(_loc(d, "name")), 20)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(title)
+	var desc: Label = _left_label(String(_loc(d, "desc")), 14, game.TEXT_COLOR)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(desc)
+	if kind == "food":
+		var fights: int = int(d.get("fights", 0))
+		var cost: HBoxContainer = HBoxContainer.new()
+		cost.add_theme_constant_override("separation", 6)
+		cost.add_child(game._coin_icon(16.0))
+		cost.add_child(_left_label(_tr("%d duit  ·  lasts %d fight%s" % [int(d.get("price", 0)), fights, "" if fights == 1 else "s"],
+			"%d duit  ·  tahan %d perlawanan" % [int(d.get("price", 0)), fights]), 14, game.PLAYER_COLOR))
+		col.add_child(cost)
+	return h
+
+
+func _journal_flip(step: int) -> void:
+	var i: int = clampi(_journal_i + step, 0, SD.MASTERS.size() - 1)
+	if i != _journal_i:
+		_journal_i = i
+		_render()
+
+
 # ---------------------------------------------------------------- credits
 
 func _build_credits() -> Control:
@@ -590,9 +734,14 @@ func _build_credits() -> Control:
 		[_tr("AUDIO", "AUDIO"), audio],
 		[_tr("FONTS", "FON"), fonts],
 		[_tr("ENGINE", "ENJIN"), ["Godot Engine (MIT)", "GodotSteam (MIT) - Gramps / GodotSteam contributors", Engine.get_license_text()]],
-		[_tr("CULTURE", "BUDAYA"), [_tr(
-			"Gasing pangkah is a Malay heritage sport: players wind a cord, throw a hardwood top and strike (pangkah) their rival's spinning top. It is still played at village and state festivals in Kelantan, Terengganu, Melaka, Penang, Sabah, Sarawak and Kuala Lumpur. The story scenes borrow from wayang kulit, the Malay shadow-puppet theatre. This game is a tribute, made with respect for the craftsmen, players and dalang who keep these traditions alive.",
-			"Gasing pangkah ialah sukan warisan Melayu: pemain melilit tali, membaling gasing kayu keras dan memangkah gasing lawan yang sedang berpusing. Ia masih dimainkan di pesta kampung dan negeri di Kelantan, Terengganu, Melaka, Pulau Pinang, Sabah, Sarawak dan Kuala Lumpur. Babak cerita meminjam seni wayang kulit, teater bayang Melayu. Permainan ini ialah penghormatan kepada tukang, pemain dan dalang yang memelihara warisan ini.")]],
+		[_tr("CULTURE", "BUDAYA"), [
+			_tr("Gasing pangkah is a Malay heritage sport: players wind a cord, throw a hardwood top and strike (pangkah) their rival's spinning top. It is still played at village and state festivals across Malaysia.",
+				"Gasing pangkah ialah sukan warisan Melayu: pemain melilit tali, membaling gasing kayu keras dan memangkah gasing lawan yang sedang berpusing. Ia masih dimainkan di pesta kampung dan negeri di seluruh Malaysia."),
+			_tr("The story follows a shipwrecked sailor through 13 states, from Perlis to Sarawak: Perlis, Kedah, Penang, Perak, Selangor, Negeri Sembilan, Melaka, Johor, Pahang, Terengganu, Kelantan, Sabah and Sarawak, each with its own gasing master, tradition and food. Its scenes borrow from wayang kulit, the Malay shadow-puppet theatre.",
+				"Cerita ini mengikuti seorang pelaut yang kapalnya karam, merentasi 13 negeri dari Perlis ke Sarawak: Perlis, Kedah, Pulau Pinang, Perak, Selangor, Negeri Sembilan, Melaka, Johor, Pahang, Terengganu, Kelantan, Sabah dan Sarawak, setiap satu dengan mahaguru gasing, tradisi dan makanannya sendiri. Babaknya meminjam seni wayang kulit, teater bayang Melayu."),
+			_tr("This game is a tribute, made with respect for the craftsmen, players and dalang who keep these traditions alive.",
+				"Permainan ini ialah penghormatan kepada tukang, pemain dan dalang yang memelihara warisan ini."),
+		]],
 	]
 	for sec: Array in sections:
 		var t: Label = game._mk_title(String(sec[0]), 22)

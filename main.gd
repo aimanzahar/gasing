@@ -1,12 +1,14 @@
 extends Node3D
 
-enum State { READY, CRAFT, WIND, LAUNCH, BATTLE, ROUND_OVER, OVER, CUTSCENE }
+enum State { READY, CRAFT, WIND, LAUNCH, BATTLE, ROUND_OVER, OVER, CUTSCENE, HUB }
 enum MenuScreen { TITLE, MP, WAIT }
 
 const ARENA_SCRIPT: Script = preload("res://scripts/arena_match.gd")
 const GASING_SCENE: PackedScene = preload("res://gasing.tscn")
 const MENUS_SCRIPT: Script = preload("res://scripts/menus.gd")
 const HT = preload("res://scripts/heritage_theme.gd")
+const SD = preload("res://scripts/story_data.gd") # the 13-state story: masters, beats, items, foods
+const ARENA_DRESS = preload("res://scripts/arena_dress.gd")
 const FONT_TITLE: FontFile = preload("res://common/fonts/Kurland.ttf")
 const TEX_PANEL: Texture2D = preload("res://assets/ui/panel_ukiran.png")
 const TEX_CARD: Texture2D = preload("res://assets/ui/panel_card.png")
@@ -47,11 +49,23 @@ const ACTION_SFX: Dictionary = {
 # state -> music bed; ROUND_OVER is absent so the battle bed carries on between rounds
 # (MP's between-round CRAFT is skipped in _enter_state for the same reason)
 const STATE_MUSIC: Dictionary = {
-	State.READY: "menu", State.CRAFT: "menu", State.OVER: "menu",
+	State.READY: "menu", State.CRAFT: "menu", State.OVER: "menu", State.HUB: "menu",
 	State.CUTSCENE: "cutscene", State.WIND: "battle", State.BATTLE: "battle",
 }
-const TITLE_CAM_SHIFT: float = -2.4 # title framing: the ring slides right of the menu column
+# the title and the village hub share one wide VISTA pose (sky + landmark beside the menu column);
+# every other screen uses the battle pose saved from main.tscn (_cam_base)
+const VISTA_POS: Vector3 = Vector3(-1.5, 3.2, 12.5)
+const VISTA_LOOK: Vector3 = Vector3(-3.0, 1.2, -2.0)
+const VISTA_FOV: float = 50.0
 const TITLE_FACTS: int = 6 # STRINGS fact_1..fact_6, rotated on the title card
+# ---- kelir stage geometry, as fractions measured up from a PNG's bottom edge (art_src wayang
+# canvases: beats 8.2 units tall with the ground line G at 0.98; the puppet sheet 1.9 tall with
+# the feet 0.34 up; ride sheets 6.4 tall with the wheels on RIDE_Y 0.3; top sheets tip 6 px of 512)
+const CUT_GROUND: float = 0.12 # a beat's ground line: puppets' feet and the top's tip stand on it
+const CUT_RIDE_LANE: float = 0.143 # a travel strip's lane: rail top / water line / near ruts, 1.17 of 8.2 units
+const CUT_PUPPET_FEET: float = 0.122 # wayang_lib PUPPET_SHEET feet 0.03 = row 899 of 1024
+const CUT_RIDE_WHEELS: float = 0.047
+const CUT_TOP_TIP: float = 0.012
 # ---- heritage UI tokens: aliases of scripts/heritage_theme.gd, the one palette
 const PLAYER_COLOR: Color = HT.PLAYER_COLOR
 const FOE_COLOR: Color = HT.FOE_COLOR
@@ -85,13 +99,21 @@ const STYLE_DEFS: Dictionary = {
 	"cikros": {"label": "Gasing Cik Ros", "shape": "jantung", "mesh": "cikros", "mass": 2.2, "spin_reserve": 70.0, "balance": 62.0, "price": 80},
 	"tokgayong": {"label": "Gasing Tok Gayong", "shape": "jantung", "mesh": "tokgayong", "mass": 2.7, "spin_reserve": 76.0, "balance": 68.0, "price": 110},
 	"datuk": {"label": "Gasing Datuk", "shape": "jantung", "mesh": "datuk", "mass": 2.9, "spin_reserve": 82.0, "balance": 74.0, "price": 150},
-	# master gasing — purchasable after defeating that master in the campaign
-	"kelantan": {"label": "Gasing Kelantan", "shape": "uri", "mesh": "kelantan", "mass": 1.7, "spin_reserve": 82.0, "balance": 62.0, "price": 90},
+	# master gasing in story order — purchasable after defeating that state's master;
+	# kl (the Endless boss's) only once the journey has ended
+	"perlis": {"label": "Gasing Perlis", "shape": "uri", "mesh": "perlis", "mass": 1.6, "spin_reserve": 92.0, "balance": 74.0, "price": 70},
+	"kedah": {"label": "Gasing Kedah", "shape": "uri", "mesh": "kedah", "mass": 1.5, "spin_reserve": 98.0, "balance": 70.0, "price": 85},
 	"penang": {"label": "Gasing Penang", "shape": "jantung", "mesh": "penang", "mass": 2.1, "spin_reserve": 72.0, "balance": 60.0, "price": 120},
+	"perak": {"label": "Gasing Perak", "shape": "jantung", "mesh": "perak", "mass": 2.8, "spin_reserve": 76.0, "balance": 66.0, "price": 140},
+	"selangor": {"label": "Gasing Selangor", "shape": "jantung", "mesh": "selangor", "mass": 2.5, "spin_reserve": 72.0, "balance": 60.0, "price": 110},
+	"nsembilan": {"label": "Gasing Negeri Sembilan", "shape": "jantung", "mesh": "nsembilan", "mass": 2.2, "spin_reserve": 86.0, "balance": 70.0, "price": 170},
 	"melaka": {"label": "Gasing Melaka", "shape": "jantung", "mesh": "melaka", "mass": 1.6, "spin_reserve": 100.0, "balance": 74.0, "price": 150},
+	"johor": {"label": "Gasing Johor", "shape": "jantung", "mesh": "johor", "mass": 2.8, "spin_reserve": 80.0, "balance": 68.0, "price": 200},
+	"pahang": {"label": "Gasing Pahang", "shape": "uri", "mesh": "pahang", "mass": 2.0, "spin_reserve": 104.0, "balance": 80.0, "price": 240},
 	"terengganu": {"label": "Gasing Terengganu", "shape": "uri", "mesh": "terengganu", "mass": 2.3, "spin_reserve": 78.0, "balance": 66.0, "price": 180},
-	"sarawak": {"label": "Gasing Sarawak", "shape": "jantung", "mesh": "sarawak", "mass": 2.6, "spin_reserve": 74.0, "balance": 64.0, "price": 220},
+	"kelantan": {"label": "Gasing Kelantan", "shape": "uri", "mesh": "kelantan", "mass": 1.7, "spin_reserve": 82.0, "balance": 62.0, "price": 90},
 	"sabah": {"label": "Gasing Sabah", "shape": "jantung", "mesh": "sabah", "mass": 2.9, "spin_reserve": 80.0, "balance": 76.0, "price": 260},
+	"sarawak": {"label": "Gasing Sarawak", "shape": "jantung", "mesh": "sarawak", "mass": 2.6, "spin_reserve": 90.0, "balance": 64.0, "price": 300},
 	"kl": {"label": "Gasing Merdeka", "shape": "uri", "mesh": "kl", "mass": 2.6, "spin_reserve": 92.0, "balance": 80.0, "price": 350},
 }
 const DEFAULT_STYLES: Array[String] = ["jantung", "uri"]
@@ -102,119 +124,76 @@ const SAVE_PATH: String = "user://workshop.cfg"
 # sky/fog/sun/lantern re-theming works even before the GLBs are produced.
 # "exposure"/"ambient" (default 1.05/0.9) tame the pale high-albedo day arenas; lanterns stay
 # warm/moderate so the dish keeps its wood tone and the dark tops read against it.
+# "hazard" (single player only, read by arena_match): slope {kind, strength m/s drift, dir} or
+# wind gusts {kind, strength, period, gust, mode "flip"|"random", dir}; dir is (x, z) and must
+# match the side the arena art falls away / blows toward. "hide_ground" hides the dark y -0.5
+# Ground plane for arenas whose terrain drops below it (the slope cuts).
 const ARENA_DEFS: Dictionary = {
-	"kampung": {"env": "", "sky_top": Color(0.30, 0.28, 0.40), "sky_horizon": Color(0.86, 0.52, 0.30),
-		"fog": Color(0.72, 0.52, 0.36), "fog_density": 0.008, "sun_color": Color(1.0, 0.86, 0.66),
-		"sun_energy": 1.05, "lantern": Color(1.0, 0.62, 0.28), "lantern_energy": 2.2},
-	"kelantan": {"env": "res://assets/arena_kelantan.glb", "sky_top": Color(0.35, 0.30, 0.35), "sky_horizon": Color(0.88, 0.58, 0.22),
-		"fog": Color(0.62, 0.45, 0.25), "fog_density": 0.004, "sun_color": Color(1.0, 0.78, 0.50),
-		"sun_energy": 1.0, "lantern": Color(1.0, 0.72, 0.30), "lantern_energy": 1.6, "exposure": 0.72, "ambient": 0.4},
-	"penang": {"env": "res://assets/arena_penang.glb", "sky_top": Color(0.12, 0.08, 0.20), "sky_horizon": Color(0.60, 0.22, 0.18),
-		"fog": Color(0.45, 0.22, 0.20), "fog_density": 0.010, "sun_color": Color(1.0, 0.60, 0.45),
-		"sun_energy": 0.45, "lantern": Color(1.0, 0.42, 0.22), "lantern_energy": 1.8, "exposure": 0.95, "ambient": 0.55},
-	"melaka": {"env": "res://assets/arena_melaka.glb", "sky_top": Color(0.12, 0.15, 0.30), "sky_horizon": Color(0.38, 0.32, 0.52),
-		"fog": Color(0.40, 0.40, 0.60), "fog_density": 0.010, "sun_color": Color(0.75, 0.80, 1.0),
-		"sun_energy": 0.55, "lantern": Color(1.0, 0.68, 0.40), "lantern_energy": 2.0, "exposure": 0.85, "ambient": 0.45},
-	"terengganu": {"env": "res://assets/arena_terengganu.glb", "sky_top": Color(0.15, 0.25, 0.38), "sky_horizon": Color(0.80, 0.72, 0.60),
-		"fog": Color(0.55, 0.60, 0.58), "fog_density": 0.005, "sun_color": Color(1.0, 0.86, 0.66),
-		"sun_energy": 0.85, "lantern": Color(1.0, 0.72, 0.42), "lantern_energy": 1.6, "exposure": 0.78, "ambient": 0.45},
-	"sarawak": {"env": "res://assets/arena_sarawak.glb", "sky_top": Color(0.08, 0.12, 0.14), "sky_horizon": Color(0.30, 0.38, 0.35),
-		"fog": Color(0.22, 0.30, 0.26), "fog_density": 0.014, "sun_color": Color(0.70, 0.80, 0.85),
-		"sun_energy": 0.5, "lantern": Color(1.0, 0.55, 0.25), "lantern_energy": 2.2},
-	"sabah": {"env": "res://assets/arena_sabah.glb", "sky_top": Color(0.35, 0.45, 0.60), "sky_horizon": Color(0.85, 0.80, 0.65),
-		"fog": Color(0.55, 0.60, 0.55), "fog_density": 0.004, "sun_color": Color(1.0, 0.88, 0.70),
-		"sun_energy": 0.95, "lantern": Color(1.0, 0.85, 0.55), "lantern_energy": 1.5, "exposure": 0.75, "ambient": 0.42},
+	# home village yard at golden hour: title, tutorial and every MP match
+	"kampung": {"env": "res://assets/arena_kampung.glb", "sky_top": Color(0.34, 0.47, 0.74), "sky_horizon": Color(1.00, 0.72, 0.40),
+		"fog": Color(0.95, 0.74, 0.48), "fog_density": 0.003, "sun_color": Color(1.00, 0.80, 0.55), "sun_energy": 1.3,
+		"lantern": Color(1.00, 0.66, 0.34), "lantern_energy": 1.6, "exposure": 0.95, "ambient": 0.38},
+	# jade paddy under a pink-gold dawn
+	"perlis": {"env": "res://assets/arena_perlis.glb", "sky_top": Color(0.34, 0.40, 0.62), "sky_horizon": Color(1.00, 0.64, 0.44),
+		"fog": Color(0.86, 0.64, 0.54), "fog_density": 0.0035, "sun_color": Color(1.00, 0.80, 0.62), "sun_energy": 1.1,
+		"lantern": Color(1.00, 0.70, 0.42), "lantern_energy": 1.4, "exposure": 0.9, "ambient": 0.45},
+	# harvest gold under a clear sky blue
+	"kedah": {"env": "res://assets/arena_kedah.glb", "sky_top": Color(0.22, 0.46, 0.86), "sky_horizon": Color(0.86, 0.85, 0.74),
+		"fog": Color(0.74, 0.80, 0.86), "fog_density": 0.0028, "sun_color": Color(1.00, 0.91, 0.74), "sun_energy": 1.15,
+		"lantern": Color(1.00, 0.80, 0.50), "lantern_energy": 1.0, "exposure": 0.85, "ambient": 0.5},
+	# hawker night: lanterns and lit shophouses
+	"penang": {"env": "res://assets/arena_penang.glb", "sky_top": Color(0.05, 0.06, 0.16), "sky_horizon": Color(0.40, 0.22, 0.30),
+		"fog": Color(0.22, 0.15, 0.22), "fog_density": 0.007, "sun_color": Color(0.62, 0.70, 1.00), "sun_energy": 0.42,
+		"lantern": Color(1.00, 0.66, 0.40), "lantern_energy": 1.0, "exposure": 1.0, "ambient": 0.58},
+	# tin tailings, rust and turquoise pools; the cut falls away toward +x
+	"perak": {"env": "res://assets/arena_perak.glb", "sky_top": Color(0.36, 0.51, 0.72), "sky_horizon": Color(0.88, 0.86, 0.80),
+		"fog": Color(0.70, 0.72, 0.70), "fog_density": 0.0025, "sun_color": Color(1.00, 0.93, 0.80), "sun_energy": 1.05,
+		"lantern": Color(1.00, 0.70, 0.42), "lantern_energy": 1.2, "exposure": 0.8, "ambient": 0.5, "hide_ground": true, "floor": Color(0.62, 0.58, 0.50),
+		"hazard": {"kind": "slope", "strength": 0.35, "dir": Vector2(1.0, 0.0)}},
+	# river-mouth dusk: deep indigo over batik colours
+	"selangor": {"env": "res://assets/arena_selangor.glb", "sky_top": Color(0.15, 0.16, 0.38), "sky_horizon": Color(0.98, 0.58, 0.46),
+		"fog": Color(0.62, 0.47, 0.58), "fog_density": 0.0042, "sun_color": Color(1.00, 0.68, 0.52), "sun_energy": 0.85,
+		"lantern": Color(1.00, 0.68, 0.36), "lantern_energy": 1.7, "exposure": 0.95, "ambient": 0.5},
+	# dark timber and Minang red-gold in the late afternoon
+	"nsembilan": {"env": "res://assets/arena_nsembilan.glb", "sky_top": Color(0.24, 0.40, 0.70), "sky_horizon": Color(0.98, 0.80, 0.56),
+		"fog": Color(0.82, 0.78, 0.66), "fog_density": 0.0022, "sun_color": Color(1.00, 0.82, 0.56), "sun_energy": 1.15,
+		"lantern": Color(1.00, 0.66, 0.32), "lantern_energy": 1.4, "exposure": 0.88, "ambient": 0.48},
+	# blue hour over the red Stadthuys and the river
+	"melaka": {"env": "res://assets/arena_melaka.glb", "sky_top": Color(0.06, 0.12, 0.38), "sky_horizon": Color(0.72, 0.56, 0.64),
+		"fog": Color(0.40, 0.44, 0.62), "fog_density": 0.006, "sun_color": Color(0.74, 0.76, 1.00), "sun_energy": 0.55,
+		"lantern": Color(1.00, 0.66, 0.40), "lantern_energy": 1.1, "exposure": 0.95, "ambient": 0.6, "floor": Color(0.56, 0.34, 0.24)},
+	# overcast wharf: grey timber, rust, sea green
+	"johor": {"env": "res://assets/arena_johor.glb", "sky_top": Color(0.42, 0.49, 0.56), "sky_horizon": Color(0.78, 0.80, 0.78),
+		"fog": Color(0.56, 0.61, 0.64), "fog_density": 0.005, "sun_color": Color(0.92, 0.92, 0.90), "sun_energy": 0.8,
+		"lantern": Color(1.00, 0.74, 0.48), "lantern_energy": 1.4, "exposure": 0.85, "ambient": 0.7, "floor": Color(0.50, 0.47, 0.42)},
+	# tea-green ridges and red earth in highland mist; falls away toward -x
+	"pahang": {"env": "res://assets/arena_pahang.glb", "sky_top": Color(0.46, 0.57, 0.62), "sky_horizon": Color(0.82, 0.86, 0.82),
+		"fog": Color(0.66, 0.74, 0.70), "fog_density": 0.0045, "sun_color": Color(0.98, 0.95, 0.86), "sun_energy": 0.9,
+		"lantern": Color(1.00, 0.78, 0.50), "lantern_energy": 1.2, "exposure": 0.85, "ambient": 0.55, "hide_ground": true,
+		"hazard": {"kind": "slope", "strength": 0.50, "dir": Vector2(-1.0, 0.0)}},
+	# windy beach: casuarinas, flags and sand drifts stream toward +z
+	"terengganu": {"env": "res://assets/arena_terengganu.glb", "sky_top": Color(0.16, 0.40, 0.80), "sky_horizon": Color(0.98, 0.86, 0.66),
+		"fog": Color(0.80, 0.86, 0.88), "fog_density": 0.0024, "sun_color": Color(1.00, 0.86, 0.64), "sun_energy": 1.15,
+		"lantern": Color(1.00, 0.72, 0.42), "lantern_energy": 1.2, "exposure": 0.82, "ambient": 0.5, "floor": Color(0.66, 0.55, 0.40),
+		"hazard": {"kind": "wind", "strength": 0.9, "period": 8.0, "gust": 2.0, "mode": "flip", "dir": Vector2(0.0, 1.0)}},
+	# wau festival under a high blue sky, kites streaming toward +x
+	"kelantan": {"env": "res://assets/arena_kelantan.glb", "sky_top": Color(0.12, 0.40, 0.88), "sky_horizon": Color(0.98, 0.82, 0.58),
+		"fog": Color(0.92, 0.82, 0.64), "fog_density": 0.0026, "sun_color": Color(1.00, 0.84, 0.58), "sun_energy": 1.2,
+		"lantern": Color(1.00, 0.74, 0.42), "lantern_energy": 1.2, "exposure": 1.0, "ambient": 0.5, "floor": Color(0.62, 0.46, 0.26),
+		"hazard": {"kind": "wind", "strength": 1.1, "period": 5.0, "gust": 1.5, "mode": "random", "dir": Vector2(1.0, 0.0)}},
+	# Kinabalu trail terrace above a cloud band; falls away toward +x
+	"sabah": {"env": "res://assets/arena_sabah.glb", "sky_top": Color(0.16, 0.40, 0.84), "sky_horizon": Color(0.80, 0.86, 0.90),
+		"fog": Color(0.74, 0.80, 0.86), "fog_density": 0.002, "sun_color": Color(1.00, 0.92, 0.80), "sun_energy": 1.1,
+		"lantern": Color(1.00, 0.80, 0.52), "lantern_energy": 1.3, "exposure": 0.9, "ambient": 0.5, "floor": Color(0.50, 0.48, 0.44),
+		"hazard": {"kind": "slope", "strength": 0.25, "dir": Vector2(1.0, 0.0)}},
+	# longhouse deck by torchlight, hangings leaning +x
+	"sarawak": {"env": "res://assets/arena_sarawak.glb", "sky_top": Color(0.03, 0.05, 0.13), "sky_horizon": Color(0.16, 0.22, 0.38),
+		"fog": Color(0.10, 0.14, 0.24), "fog_density": 0.006, "sun_color": Color(0.58, 0.68, 1.00), "sun_energy": 0.4,
+		"lantern": Color(1.00, 0.68, 0.42), "lantern_energy": 1.0, "exposure": 1.15, "ambient": 0.35, "floor": Color(0.36, 0.26, 0.18),
+		"hazard": {"kind": "wind", "strength": 0.6, "period": 9.0, "gust": 2.0, "mode": "random", "dir": Vector2(1.0, 0.0)}},
 	"kl": {"env": "res://assets/arena_kl.glb", "sky_top": Color(0.05, 0.05, 0.12), "sky_horizon": Color(0.35, 0.22, 0.40),
 		"fog": Color(0.28, 0.20, 0.35), "fog_density": 0.010, "sun_color": Color(0.85, 0.75, 1.0),
 		"sun_energy": 0.4, "lantern": Color(0.95, 0.50, 0.90), "lantern_energy": 2.0},
-}
-
-# wayang kulit narration before each campaign duel: master id -> {lang -> [paragraphs]}
-const CUTSCENES: Dictionary = {
-	"kelantan": {
-		"en": [
-			"In Kelantan, where the paddy turns gold before harvest, giant gasing have spun for centuries. Villagers say the tradition carries the blessing of Che Siti Wan Kembang — the legendary warrior-queen who ruled these lands from the back of an elephant.",
-			"Tok Wan Nik has wound cords since he was seven. His tops are cut from merbau heartwood and balanced so finely they hum. They call his gasing the golden heart of Kelantan.",
-			"Beat him, and the gelanggang will speak your name from Kota Bharu to the sea.",
-		],
-		"ms": [
-			"Di Kelantan, tempat padi menguning sebelum menuai, gasing raksasa telah berpusing berabad lamanya. Kata orang kampung, tradisi ini membawa restu Che Siti Wan Kembang — ratu pahlawan lagenda yang memerintah dari belakang gajah.",
-			"Tok Wan Nik memusing tali sejak umur tujuh tahun. Gasingnya dilarik dari teras merbau dan diimbang halus hingga berdengung. Orang menggelarnya jantung emas Kelantan.",
-			"Kalahkan beliau, dan gelanggang akan menyebut namamu dari Kota Bharu hingga ke laut.",
-		],
-	},
-	"penang": {
-		"en": [
-			"In George Town's shophouse rows, East met West and made something new: the Peranakan — Straits Chinese whose kebaya, kitchens and craft weave two worlds into one.",
-			"Kapitan Ong descends from the Kapitan Cina, leaders trusted to keep peace in the old port. His lacquered top burns vermillion and gold, quick and sharp as a festival firecracker.",
-			"He strikes fast and laughs faster. Do not blink.",
-		],
-		"ms": [
-			"Di deretan rumah kedai George Town, Timur bertemu Barat dan lahirlah sesuatu yang baharu: Peranakan — Cina Selat yang kebaya, dapur dan seni mereka menganyam dua dunia menjadi satu.",
-			"Kapitan Ong berketurunan Kapitan Cina, pemimpin yang diamanahkan menjaga keamanan pelabuhan lama. Gasing lakuernya menyala merah saga dan emas, pantas dan tajam bak mercun perayaan.",
-			"Pangkahnya pantas, tawanya lebih pantas. Jangan berkelip.",
-		],
-	},
-	"melaka": {
-		"en": [
-			"Five hundred years ago, Tamil traders sailed the spice routes to Melaka and stayed. Their descendants, the Chitty, still keep temples fragrant with jasmine and customs found nowhere else on Earth.",
-			"Tuan Pillay learned patience from the tides that carried his ancestors. His sapphire top spins long and low, a trading ship riding out the monsoon — it simply refuses to fall.",
-			"Outlast him if you can. The spice trade taught his family to wait out anything.",
-		],
-		"ms": [
-			"Lima ratus tahun lalu, pedagang Tamil belayar di laluan rempah ke Melaka dan terus menetap. Keturunan mereka, masyarakat Chitty, masih menjaga kuil yang harum dengan melur dan adat yang tiada di tempat lain di dunia.",
-			"Tuan Pillay belajar kesabaran daripada pasang surut yang membawa nenek moyangnya. Gasing nilamnya berpusing lama dan rendah, bagai kapal dagang mengharungi monsun — ia enggan tumbang.",
-			"Bertahanlah jika mampu. Perdagangan rempah mengajar keluarganya menunggu apa sahaja.",
-		],
-	},
-	"terengganu": {
-		"en": [
-			"On Terengganu's coast, fishermen read the sea like scripture. They tell of spirits who guard the waves — and of gasing spun on the sand at monsoon's end, in thanks for a season survived.",
-			"Pak Awang Laut carves his tops from driftwood the ocean gives back. His turquoise gasing strikes like a breaking wave, then slips away like the undertow.",
-			"The monsoon is coming. Show him your winds blow stronger.",
-		],
-		"ms": [
-			"Di pesisir Terengganu, nelayan membaca laut seperti kitab. Mereka bercerita tentang penunggu yang menjaga ombak — dan gasing yang dipusing di pasir pada hujung monsun, tanda syukur musim yang selamat.",
-			"Pak Awang Laut melarik gasingnya daripada kayu hanyut yang dipulangkan lautan. Gasing firusnya memangkah bagai ombak pecah, lalu menghilang bagai arus bawah.",
-			"Monsun bakal tiba. Tunjukkan anginmu bertiup lebih kencang.",
-		],
-	},
-	"sarawak": {
-		"en": [
-			"In the longhouses of Sarawak, the Iban wear their history in ink. The Bunga Terung — the eggplant flower tattoo — marks a youth's first bejalai, the great journey into the world.",
-			"Tuai Unggat's forebears were warriors whose names crossed rivers; today he honours that strength in the ring instead. His top crackles like lightning over the Rajang, every strike a thunderclap.",
-			"Every scar on his gasing is a story. Do not become the next one.",
-		],
-		"ms": [
-			"Di rumah panjang Sarawak, kaum Iban memakai sejarah pada tinta. Bunga Terung — tatu bunga terung — menandakan bejalai pertama seorang pemuda, pengembaraan besar ke dunia luar.",
-			"Nenek moyang Tuai Unggat pahlawan yang namanya menyeberangi sungai; kini beliau menyanjung kekuatan itu di gelanggang. Gasingnya berdetap bagai kilat di atas Rajang, setiap pangkah bagai guruh.",
-			"Setiap calar pada gasingnya adalah kisah. Jangan jadi kisah seterusnya.",
-		],
-	},
-	"sabah": {
-		"en": [
-			"Beneath Mount Kinabalu, the Kadazan-Dusun tell of Monsopiad, the great warrior who defended his village so fiercely that a house still bears his name and legend.",
-			"Huguan Gimbang farms rice on the very slopes his ancestors defended. His gasing is heavy as the mountain and patient as the harvest — it does not chase; it endures, green as the terraces after rain.",
-			"At Kaamatan, the harvest festival, no one has out-spun him in thirty years.",
-		],
-		"ms": [
-			"Di bawah Gunung Kinabalu, kaum Kadazan-Dusun bercerita tentang Monsopiad, pahlawan agung yang mempertahankan kampungnya hingga sebuah rumah masih menyandang nama dan lagendanya.",
-			"Huguan Gimbang menanam padi di lereng yang dipertahankan nenek moyangnya. Gasingnya berat seperti gunung dan sabar seperti musim menuai — ia tidak mengejar; ia bertahan, hijau bagai teres sawah selepas hujan.",
-			"Pada Pesta Kaamatan, tiada siapa menewaskan pusingannya selama tiga puluh tahun.",
-		],
-	},
-	"kl": {
-		"en": [
-			"Kuala Lumpur — where every road in Malaysia eventually leads. Beneath the towers, kampung kids and city kids — Malay, Chinese, Indian, Iban, Kadazan and more — spin their tops in the same concrete gelanggang.",
-			"They say the Mahaguru studied under every master you have faced. His gasing carries all their colours at once — a spinning rainbow, like the flags on Merdeka morning.",
-			"One nation. One ring. One last duel. Everything you have learned comes down to this.",
-		],
-		"ms": [
-			"Kuala Lumpur — destinasi segala jalan di Malaysia. Di bawah menara, anak kampung dan anak kota — Melayu, Cina, India, Iban, Kadazan dan banyak lagi — memusing gasing di gelanggang konkrit yang sama.",
-			"Kata orang, Mahaguru pernah berguru dengan setiap mahaguru yang telah kaulawan. Gasingnya membawa semua warna mereka serentak — pelangi berpusing, bagai bendera pagi Merdeka.",
-			"Satu bangsa. Satu gelanggang. Satu duel terakhir. Segala yang kaupelajari tertumpu di sini.",
-		],
-	},
 }
 
 const MATERIAL_DEFS: Dictionary = {
@@ -228,38 +207,9 @@ const MAT_PRICES: Dictionary = {"merbau": 20, "kemuning": 25, "besi": 30}
 const ACCENT_CHOICES: Array[Color] = [
 	HT.SONGKET_GOLD, HT.SEPANG, HT.PANDAN, HT.NILA, HT.COPPER, HT.CREAM_MUTED,
 ]
-# The story campaign: 7 masters, one per state/culture. id doubles as the STYLE_DEFS key,
-# mesh id (gasing_<id>.glb), CUTSCENES key, wayang puppet suffix, and ARENA_DEFS key.
-const MASTERS: Array[Dictionary] = [
-	{"id": "kelantan", "name": "Tok Wan Nik", "region_en": "Kelantan", "region_ms": "Kelantan",
-		"shape": "uri", "mesh": "kelantan", "color": Color(1.0, 0.82, 0.30),
-		"mass": 1.7, "spin_reserve": 82.0, "balance": 62.0,
-		"wind_mean": 66.0, "wind_dev": 16.0, "aggressive": false, "coins": 40, "arena": "kelantan"},
-	{"id": "penang", "name": "Kapitan Ong", "region_en": "Penang", "region_ms": "Pulau Pinang",
-		"shape": "jantung", "mesh": "penang", "color": Color(1.0, 0.42, 0.15),
-		"mass": 2.1, "spin_reserve": 72.0, "balance": 60.0,
-		"wind_mean": 72.0, "wind_dev": 13.0, "aggressive": true, "coins": 55, "arena": "penang"},
-	{"id": "melaka", "name": "Tuan Pillay", "region_en": "Melaka", "region_ms": "Melaka",
-		"shape": "jantung", "mesh": "melaka", "color": Color(0.25, 0.45, 1.0),
-		"mass": 1.6, "spin_reserve": 100.0, "balance": 74.0,
-		"wind_mean": 76.0, "wind_dev": 11.0, "aggressive": false, "coins": 70, "arena": "melaka"},
-	{"id": "terengganu", "name": "Pak Awang Laut", "region_en": "Terengganu", "region_ms": "Terengganu",
-		"shape": "uri", "mesh": "terengganu", "color": Color(0.20, 0.85, 0.80),
-		"mass": 2.3, "spin_reserve": 78.0, "balance": 66.0,
-		"wind_mean": 80.0, "wind_dev": 9.0, "aggressive": true, "coins": 85, "arena": "terengganu"},
-	{"id": "sarawak", "name": "Tuai Unggat", "region_en": "Sarawak", "region_ms": "Sarawak",
-		"shape": "jantung", "mesh": "sarawak", "color": Color(0.75, 0.85, 1.0),
-		"mass": 2.6, "spin_reserve": 74.0, "balance": 64.0,
-		"wind_mean": 84.0, "wind_dev": 7.0, "aggressive": true, "coins": 100, "arena": "sarawak"},
-	{"id": "sabah", "name": "Huguan Gimbang", "region_en": "Sabah", "region_ms": "Sabah",
-		"shape": "jantung", "mesh": "sabah", "color": Color(0.45, 0.80, 0.35),
-		"mass": 2.9, "spin_reserve": 80.0, "balance": 76.0,
-		"wind_mean": 88.0, "wind_dev": 5.0, "aggressive": false, "coins": 120, "arena": "sabah"},
-	{"id": "kl", "name": "Mahaguru Merdeka", "region_en": "Kuala Lumpur", "region_ms": "Kuala Lumpur",
-		"shape": "uri", "mesh": "kl", "color": Color(0.85, 0.70, 1.0),
-		"mass": 2.6, "spin_reserve": 92.0, "balance": 80.0,
-		"wind_mean": 92.0, "wind_dev": 3.5, "aggressive": true, "coins": 160, "arena": "kl"},
-]
+# the 13 story masters in travel order (scripts/story_data.gd). id doubles as the STYLE_DEFS key,
+# mesh id (gasing_<id>.glb), wayang puppet suffix and ARENA_DEFS key.
+const MASTERS = SD.MASTERS
 
 const STRINGS: Dictionary = {
 	"en": {
@@ -280,9 +230,7 @@ const STRINGS: Dictionary = {
 		"fight": "FIGHT!",
 		"round_win": "YOU WIN!",
 		"round_lose": "%s wins this duel...",
-		"over_win": "CHAMPION OF THE GELANGGANG!",
 		"over_lose": "DEFEATED...",
-		"duels_won": "Duels won: %d / %d",
 		"restart": "RESTART RUN",
 		"or_space": "(or press SPACE)",
 		"you": "You",
@@ -298,14 +246,13 @@ const STRINGS: Dictionary = {
 		"stat_spin": "Spin",
 		"stat_balance": "Balance",
 		"tip_stat_mass": "Mass — pangkah power.\nStrike force scales with (your mass ÷ theirs):\nheavy tops shove rivals far and barely budge when hit.",
-		"tip_stat_spin": "Spin — your top's stamina.\nLaunch spin = wind quality × Spin, and a larger\nreserve also fades slower. Outlast the rival's top.",
+		"tip_stat_spin": "Spin — your top's staying power.\nLaunch spin = wind quality × Spin, and a larger\nreserve also fades slower. Outlast the rival's top.",
 		"tip_stat_balance": "Balance — steadiness as spin fades.\nWobble lean shrinks as Balance rises:\na balanced top staggers less and topples later.",
-		"stat_legend": "Mass = strike power  ·  Spin = stamina  ·  Balance = steadiness  (hover a stat for details)",
+		"stat_legend": "Mass = strike power  ·  Spin = staying power  ·  Balance = steadiness  (hover a stat for details)",
 		"meter": "WIND",
 		"tip_merbau": "Merbau — dense heartwood.\n+0.3 Mass: your strikes shove rivals harder\nand this top resists knockback.",
 		"tip_kemuning": "Kemuning — fine golden wood.\n+7 Balance: wobbles later as spin fades\nand resists toppling when struck.",
 		"tip_besi": "Besi — a heavy iron core.\n+0.5 Mass: much harder pangkah strikes.",
-		"single_player": "SINGLE PLAYER",
 		"multiplayer": "MULTIPLAYER",
 		"quit": "QUIT",
 		"mp_steam_header": "VIA STEAM",
@@ -342,7 +289,6 @@ const STRINGS: Dictionary = {
 		"mat_bought": "+1 %s bought.",
 		"lacquer": "LACQUER",
 		"next_opp": "NEXT OPPONENT",
-		"duel_n": "Duel %d / %d",
 		"wave_n": "Wave %d",
 		"slot_assign": "Slot %d  ←  %s",
 		"buy_mat": "BUY +1 · %d duit",
@@ -354,7 +300,6 @@ const STRINGS: Dictionary = {
 		"stat_kos": "Knockouts",
 		"stat_perfect": "Perfect launches",
 		"coin_gain": "+%d duit",
-		"masters_beaten": "Masters beaten",
 		"run_coins": "+%d duit earned this run",
 		"new_best": "NEW BEST!",
 		"cut_continue": "Click / SPACE to continue",
@@ -379,7 +324,14 @@ const STRINGS: Dictionary = {
 		"role_terengganu": "Breaking wave — hit and slip",
 		"role_sarawak": "Thunderclap — brutal strikes",
 		"role_sabah": "The mountain — immovable",
-		"role_kl": "All colours as one — the final master",
+		"role_kl": "All colours as one — the Endless champion",
+		"role_perlis": "Hand-carved — slow and patient",
+		"role_kedah": "Gate keeper — timing is everything",
+		"role_perak": "Tin miner — sure on rough ground",
+		"role_selangor": "City striker — young and fierce",
+		"role_nsembilan": "Adat's answer — strikes back in kind",
+		"role_johor": "Dockside rush — relentless",
+		"role_pahang": "Highland calm — steady on the slopes",
 		"round_won": "ROUND WON!",
 		"round_lost": "%s takes the round",
 		"round_draw": "DRAW",
@@ -391,7 +343,6 @@ const STRINGS: Dictionary = {
 		"reason_draw": "Draw — replay",
 		"reason_forfeit": "A rival left the ring",
 		"level_up": "LEVEL UP! %s Lv.%d",
-		"continue_duel": "CONTINUE · Duel %d/%d",
 		"howto": "HOW TO PLAY",
 		"settings": "SETTINGS",
 		"credits": "CREDITS",
@@ -410,15 +361,59 @@ const STRINGS: Dictionary = {
 		"players_count": "PLAYERS %d / 4",
 		"connected_wait": "CONNECTED — WAITING FOR HOST",
 		"hint_steer": "WASD steer · click to push",
-		"hint_dash": "SHIFT dash · hold E to rush — energy never refills",
+		"hint_dash": "SHIFT dash · hold E to rush — both spend energy, so time them",
 		"hint_reserve": "Press %d, hold + release SPACE to launch a reserve!",
-		"hud_duel": "Duel %d/%d · %s",
 		"hud_wave": "Wave %d · %s",
 		"hud_ffa": "FFA · first to %d",
 		"hud_leading": "Leading: %s",
 		"hud_even": "Dead even!",
 		"hud_keycaps": "WASD|CLICK|SHIFT|E|SPACE|1 2 3|ESC",
 		"hud_keys": "steer|push|dash|rush|jump|select|pause",
+		# story: title, village hub, journey beats, endings, hazards
+		"sp_new": "NEW JOURNEY",
+		"sp_continue": "CONTINUE · %s (%d/%d)",
+		"hud_story": "%s · %s",
+		"kind_tutorial": "First match",
+		"kind_local": "Village match",
+		"kind_master": "Master duel",
+		"hub_stop": "Stop %d / %d",
+		"hub_village": "VILLAGE MATCH",
+		"hub_next_villager": "Next: %s · prize %d duit",
+		"hub_challenge": "CHALLENGE %s",
+		"hub_rematch": "REMATCH %s",
+		"hub_master_info": "Best of 3 · prize %d duit",
+		"hub_food": "FOOD STALL",
+		"hub_food_none": "Beat this state's master to unlock its dish. Dishes boost you for a few fights; master items last forever.",
+		"hub_food_price": "%s · %d duit · %d-fight boost",
+		"hub_food_active": "Food boost: %s · fights left: %d",
+		"hub_food_bought": "%s eaten — boost active · fights left: %d",
+		"hub_journal": "JOURNAL",
+		"hub_travel": "TRAVEL TO %s · %d duit",
+		"hub_travel_by": "By %s",
+		"hub_travel_locked": "Beat %s before you travel on.",
+		"hub_travel_confirm": "Press again to pay %d duit for the %s",
+		"hub_travel_free": "TRAVEL ANYWHERE",
+		"hub_dest": "Choose your next stop",
+		"hub_menu": "MENU",
+		"hub_tutorial_done": "%s won't teach you until you beat him. Village matches earn duit for food and travel.",
+		"master_reward": "Received: %s (permanent)  ·  %s now at the food stall",
+		"beat_wreck": "THE STORM",
+		"beat_village": "THE VILLAGE",
+		"beat_land": "THE LAND",
+		"beat_people": "THE PEOPLE",
+		"beat_food": "THE FOOD",
+		"beat_master": "THE MASTER",
+		"beat_travel": "THE JOURNEY",
+		"beat_ending": "EPILOGUE",
+		"ending_title": "Journey's end",
+		"ending_prompt": "Your ship is mended. Sail home, or stay and keep travelling? Sailing home starts a new journey from Perlis; your duit and tops stay.",
+		"ending_home": "SAIL HOME",
+		"ending_stay": "STAY AND TRAVEL",
+		"locked_story": "Finish the journey to unlock",
+		"hint_slope": "The ground slopes here — idle tops slide downhill. Switch tops with 1 2 3!",
+		"hint_wind": "Gusts sweep this ring — watch the floor arrow and hold your ground!",
+		"tide_surge": "SURGE!",
+		"lucky": "LUCKY!",
 		# arena HUD / callouts / FFA lobby (squad card words split on "|")
 		"call_launch": "LAUNCH!",
 		"grade_snap": "CORD SNAPPED!",
@@ -464,9 +459,7 @@ const STRINGS: Dictionary = {
 		"fight": "MULA LAWAN!",
 		"round_win": "KAMU MENANG!",
 		"round_lose": "%s menang duel ini...",
-		"over_win": "JUARA GELANGGANG!",
 		"over_lose": "TEWAS...",
-		"duels_won": "Duel dimenangi: %d / %d",
 		"restart": "MULA SEMULA",
 		"or_space": "(atau tekan SPACE)",
 		"you": "Kamu",
@@ -479,17 +472,16 @@ const STRINGS: Dictionary = {
 		"desc_kemuning": "+7 imbangan",
 		"desc_besi": "+0.5 jisim, pangkah lebih kuat",
 		"stat_mass": "Jisim",
-		"stat_spin": "Pusingan",
+		"stat_spin": "Putaran",
 		"stat_balance": "Imbangan",
 		"tip_stat_mass": "Jisim — kuasa pangkah.\nDaya hentaman ikut (jisimmu ÷ jisim lawan):\ngasing berat menolak jauh dan tahan ditolak.",
-		"tip_stat_spin": "Pusingan — stamina gasing.\nPusingan mula = mutu lilitan × Pusingan, dan simpanan\nbesar susut lebih perlahan. Bertahan lebih lama.",
-		"tip_stat_balance": "Imbangan — kestabilan bila pusingan susut.\nGoyangan mengecil bila Imbangan tinggi:\nlambat terhuyung, lambat tumbang.",
-		"stat_legend": "Jisim = kuasa pangkah  ·  Pusingan = stamina  ·  Imbangan = kestabilan  (tuding pada stat untuk butiran)",
+		"tip_stat_spin": "Putaran — daya tahan gasing.\nPutaran mula = mutu lilitan × Putaran, dan simpanan\nbesar susut lebih perlahan. Bertahan lebih lama.",
+		"tip_stat_balance": "Imbangan — kestabilan bila putaran susut.\nGoyangan mengecil bila Imbangan tinggi:\nlambat terhuyung, lambat tumbang.",
+		"stat_legend": "Jisim = kuasa pangkah  ·  Putaran = daya tahan  ·  Imbangan = kestabilan  (tuding pada stat untuk butiran)",
 		"meter": "PUSING",
-		"tip_merbau": "Merbau — teras kayu padat.\n+0.3 Jisim: pangkah anda lebih kuat\ndan gasing lebih tahan tolakan.",
-		"tip_kemuning": "Kemuning — kayu halus keemasan.\n+7 Imbangan: lambat goyang bila pusingan susut\ndan tahan tumbang bila dipangkah.",
+		"tip_merbau": "Merbau — teras kayu padat.\n+0.3 Jisim: pangkahmu lebih kuat\ndan gasing lebih tahan tolakan.",
+		"tip_kemuning": "Kemuning — kayu halus keemasan.\n+7 Imbangan: lambat goyang bila putaran susut\ndan tahan tumbang bila dipangkah.",
 		"tip_besi": "Besi — teras besi berat.\n+0.5 Jisim: pangkah jauh lebih kuat.",
-		"single_player": "MAIN SENDIRIAN",
 		"multiplayer": "BERBILANG PEMAIN",
 		"quit": "KELUAR",
 		"mp_steam_header": "MELALUI STEAM",
@@ -526,19 +518,17 @@ const STRINGS: Dictionary = {
 		"mat_bought": "+1 %s dibeli.",
 		"lacquer": "LAKUER",
 		"next_opp": "LAWAN SETERUSNYA",
-		"duel_n": "Duel %d / %d",
 		"wave_n": "Gelombang %d",
 		"slot_assign": "Slot %d  ←  %s",
 		"buy_mat": "BELI +1 · %d duit",
 		"forge_gain": "Tempa: %s",
 		"forge_full": "%s · MAKS",
 		"continue": "TERUSKAN",
-		"round_of": "PUSINGAN %d  ·  TERBAIK DARI 3",
+		"round_of": "PUSINGAN %d  ·  TERBAIK DARIPADA 3",
 		"stat_hits": "Pangkah",
 		"stat_kos": "Tumbang",
 		"stat_perfect": "Lancar sempurna",
 		"coin_gain": "+%d duit",
-		"masters_beaten": "Mahaguru ditewaskan",
 		"run_coins": "+%d duit diperoleh dalam larian ini",
 		"new_best": "REKOD BAHARU!",
 		"cut_continue": "Klik / SPACE untuk sambung",
@@ -559,11 +549,18 @@ const STRINGS: Dictionary = {
 		"role_datuk": "Gasing mahaguru — kuasa dan imbangan",
 		"role_kelantan": "Jantung emas — cara lama",
 		"role_penang": "Mercun — pangkah pantas",
-		"role_melaka": "Sabar pedagang — pusingan panjang",
+		"role_melaka": "Sabar pedagang — putaran panjang",
 		"role_terengganu": "Ombak pecah — pangkah dan undur",
 		"role_sarawak": "Guruh — pangkah padu",
 		"role_sabah": "Gunung — teguh tak goyah",
-		"role_kl": "Segala warna bersatu — mahaguru terakhir",
+		"role_kl": "Segala warna bersatu — juara tanpa henti",
+		"role_perlis": "Ukiran tangan — perlahan dan sabar",
+		"role_kedah": "Penjaga pintu air — masa segalanya",
+		"role_perak": "Pelombong bijih — teguh di tanah kasar",
+		"role_selangor": "Pemangkah kota — muda dan garang",
+		"role_nsembilan": "Jawapan adat — membalas setimpal",
+		"role_johor": "Meluru di dermaga — tanpa henti",
+		"role_pahang": "Tenang tanah tinggi — teguh di lereng",
 		"round_won": "PUSINGAN DIMENANGI!",
 		"round_lost": "%s menang pusingan ini",
 		"round_draw": "SERI",
@@ -571,11 +568,10 @@ const STRINGS: Dictionary = {
 		"time_up": "MASA TAMAT!",
 		"reason_ko": "Yang terakhir berpusing",
 		"reason_time_count": "Masa tamat — %d gasing lawan %d",
-		"reason_time_spin": "Masa tamat — pusingan lebih %d%% lawan %d%%",
+		"reason_time_spin": "Masa tamat — putaran lebih %d%% lawan %d%%",
 		"reason_draw": "Seri — ulang semula",
 		"reason_forfeit": "Seorang lawan meninggalkan gelanggang",
 		"level_up": "NAIK TAHAP! %s Lv.%d",
-		"continue_duel": "SAMBUNG · Duel %d/%d",
 		"howto": "CARA BERMAIN",
 		"settings": "TETAPAN",
 		"credits": "KREDIT",
@@ -583,8 +579,8 @@ const STRINGS: Dictionary = {
 		"progress_masters": "Mahaguru ditewaskan %d / %d",
 		"progress_endless": "Rekod tanpa henti: gelombang %d",
 		"did_you_know": "TAHUKAH ANDA?",
-		"fact_1": "Gasing pangkah ialah permainan memangkah: baling gasing anda untuk memukul dan menjatuhkan gasing lawan.",
-		"fact_2": "Dalam gasing uri, pusingan paling lama menang — pemain mahir mampu memusingkannya sejam atau lebih.",
+		"fact_1": "Gasing pangkah ialah permainan memangkah: baling gasingmu untuk memukul dan menjatuhkan gasing lawan.",
+		"fact_2": "Dalam gasing uri, putaran paling lama menang — pemain mahir mampu memusingkannya sejam atau lebih.",
 		"fact_3": "Gasing diukir daripada kayu keras seperti merbau, kemuning dan bakau, selalunya berlilit besi supaya berat.",
 		"fact_4": "Secara tradisi, gasing dimainkan selepas musim menuai padi, apabila sawah lapang menjadi gelanggang.",
 		"fact_5": "Gasing yang seimbang sempurna seolah-olah 'tidur': berpusing begitu tenang hingga nampak tidak bergerak.",
@@ -594,15 +590,59 @@ const STRINGS: Dictionary = {
 		"players_count": "PEMAIN %d / 4",
 		"connected_wait": "DISAMBUNG — MENUNGGU HOS",
 		"hint_steer": "WASD kemudi · klik untuk tolak",
-		"hint_dash": "SHIFT pecut · tahan E untuk meluru — tenaga tidak diisi semula",
+		"hint_dash": "SHIFT pecut · tahan E untuk meluru — kedua-duanya guna tenaga, jadi pilih masanya",
 		"hint_reserve": "Tekan %d, tahan + lepas SPACE untuk melancar simpanan!",
-		"hud_duel": "Duel %d/%d · %s",
 		"hud_wave": "Gelombang %d · %s",
 		"hud_ffa": "FFA · sasaran %d menang",
 		"hud_leading": "Mendahului: %s",
 		"hud_even": "Seri!",
 		"hud_keycaps": "WASD|KLIK|SHIFT|E|SPACE|1 2 3|ESC",
 		"hud_keys": "kemudi|tolak|pecut|meluru|lompat|pilih|jeda",
+		# story: title, village hub, journey beats, endings, hazards
+		"sp_new": "PENGEMBARAAN BAHARU",
+		"sp_continue": "SAMBUNG · %s (%d/%d)",
+		"hud_story": "%s · %s",
+		"kind_tutorial": "Perlawanan pertama",
+		"kind_local": "Perlawanan kampung",
+		"kind_master": "Duel mahaguru",
+		"hub_stop": "Persinggahan %d / %d",
+		"hub_village": "LAWAN ORANG KAMPUNG",
+		"hub_next_villager": "Seterusnya: %s · ganjaran %d duit",
+		"hub_challenge": "CABAR %s",
+		"hub_rematch": "LAWAN SEMULA %s",
+		"hub_master_info": "Terbaik daripada 3 · ganjaran %d duit",
+		"hub_food": "GERAI MAKANAN",
+		"hub_food_none": "Kalahkan mahaguru negeri ini untuk membuka juadahnya. Juadah memberi kelebihan untuk beberapa perlawanan; barang mahaguru kekal selamanya.",
+		"hub_food_price": "%s · %d duit · %d perlawanan",
+		"hub_food_active": "Kelebihan juadah: %s · baki perlawanan: %d",
+		"hub_food_bought": "%s dimakan — kelebihan aktif · baki perlawanan: %d",
+		"hub_journal": "JURNAL",
+		"hub_travel": "BERTOLAK KE %s · %d duit",
+		"hub_travel_by": "Menaiki %s",
+		"hub_travel_locked": "Kalahkan %s sebelum meneruskan perjalanan.",
+		"hub_travel_confirm": "Tekan sekali lagi untuk membayar tambang %d duit bagi %s",
+		"hub_travel_free": "KEMBARA KE MANA-MANA",
+		"hub_dest": "Pilih persinggahan seterusnya",
+		"hub_menu": "MENU",
+		"hub_tutorial_done": "%s tidak akan mengajarmu selagi kamu belum menewaskannya. Perlawanan kampung memberi duit untuk juadah dan tambang.",
+		"master_reward": "Diterima: %s (kekal)  ·  %s kini dijual di gerai makanan",
+		"beat_wreck": "RIBUT",
+		"beat_village": "KAMPUNG NELAYAN",
+		"beat_land": "BUMI",
+		"beat_people": "MASYARAKAT",
+		"beat_food": "JUADAH",
+		"beat_master": "MAHAGURU",
+		"beat_travel": "PERJALANAN",
+		"beat_ending": "PENUTUP",
+		"ending_title": "Penghujung pengembaraan",
+		"ending_prompt": "Kapalmu sudah dibaiki. Belayar pulang, atau tinggal dan terus mengembara? Belayar pulang memulakan pengembaraan baharu dari Perlis; duit dan gasingmu kekal.",
+		"ending_home": "BELAYAR PULANG",
+		"ending_stay": "TINGGAL & MENGEMBARA",
+		"locked_story": "Tamatkan pengembaraan untuk membukanya",
+		"hint_slope": "Tanah di sini condong — gasing yang dibiar menggelongsor. Tukar gasing dengan 1 2 3!",
+		"hint_wind": "Angin kencang melanda gelanggang — perhati anak panah di lantai dan bertahan!",
+		"tide_surge": "GELORA!",
+		"lucky": "BERTUAH!",
 		# arena HUD / callouts / FFA lobby (squad card words split on "|")
 		"call_launch": "LEPAS!",
 		"grade_snap": "TALI PUTUS!",
@@ -615,11 +655,11 @@ const STRINGS: Dictionary = {
 		"deny_cooldown": "BERTENANG",
 		"hud_how": "Tahan SPACE, lepas di emas",
 		"hud_launch_in": "LONTAR DALAM %d",
-		"hud_aim_spin": "A/D halakan · pusingan %d%%",
+		"hud_aim_spin": "A/D halakan · putaran %d%%",
 		"hud_launched": "DILONTAR",
 		"hud_waiting": "Menunggu lawan · %ds",
 		"hud_reserve_n": "SIMPANAN %d",
-		"hud_cancel_spin": "Tetikus halakan · Esc batal\nPusingan %d%%",
+		"hud_cancel_spin": "Tetikus halakan · Esc batal\nPutaran %d%%",
 		"prompt_grace": "Tiada gasing! Tekan %d + tahan SPACE · auto %ds",
 		"prompt_reserve": "Simpanan %d auto dalam %ds · tekan %d, tahan SPACE",
 		"card_words": "PUSING|TENAGA|PECUT|LOMPAT|SIMPANAN|TUMBANG|Dilontar dalam %ds|Tersingkir",
@@ -644,7 +684,7 @@ var difficulty: int = 0 # Normal / Hard / Master
 var style_xp: Dictionary = {}
 var unlocked_styles: Array[String] = []
 var coins: int = 0
-var defeated_masters: Array[String] = [] # master ids beaten in the campaign (gates shop purchases)
+var defeated_masters: Array[String] = [] # story state ids whose master is beaten (items, foods, shop gates)
 var style_accents: Dictionary = {} # style_id -> Color, player-chosen lacquer trim (SP only)
 var endless_best: int = 0
 var endless_mode: bool = false
@@ -655,7 +695,6 @@ var _inspect_pitch: float = 0.0
 var _inspect_zoom: float = 2.8
 var _preview_tween: Tween = null
 var duel_index: int = 0
-var run_won: bool = false
 var arena: Node = null
 var player_top: Gasing = null
 var foe_top: Gasing = null
@@ -720,20 +759,28 @@ var material_buy_buttons: Dictionary = {}
 var accent_row: Control = null # lacquer palette card beside the preview
 var accent_label: Label = null
 var cutscene_panel: Control = null
-var cut_puppet: TextureRect = null
+var cut_stage: Control = null # the wide scene area above the text box; holds the beat layers
+var cut_bg: TextureRect = null # dim backdrop (the master beat reuses the land scene)
+var cut_art: TextureRect = null # main scene, cross-faded per beat
+var cut_art_prev: TextureRect = null # the previous scene fading out under it
+var cut_top: TextureRect = null # a top's silhouette: drops in and wobbles on its tip
+var cut_puppet: TextureRect = null # the master (or sailor) stepping up to the lamp
+var cut_ride: TextureRect = null # the vehicle crossing a travel strip
 var cut_name_label: Label = null
 var cut_text: Label = null
 var cut_hint: Label = null
 var cut_skip_button: Button = null
-var _cut_pars: Array = []
+var _cut_beats: Array = [] # beat dicts (story_data.gd beat contract) of the telling on the kelir
+var _cut_title: String = ""
+var _cut_done: Callable = Callable() # where the telling leads; run exactly once (SKIP or natural close)
 var _cut_idx: int = 0
 var _cut_tween: Tween = null
-var _puppet_tween: Tween = null
+var _beat_tweens: Array[Tween] = [] # the current beat's layer animations
 var _env: Environment = null
 var _sky_mat: ProceduralSkyMaterial = null
 var _sun: DirectionalLight3D = null
 var _lanterns: Array[OmniLight3D] = []
-var _default_extras: Node3D = null
+var _floor_mat: StandardMaterial3D = null # the dish plaster, tinted per arena
 var _arena_node: Node3D = null
 var current_arena: String = ""
 var lang_buttons: Dictionary = {}
@@ -785,9 +832,18 @@ var _netbot: bool = false # debug autopilot for LAN testing: run with `-- netbot
 var _test_mode: bool = false
 
 var menus: Node = null # scripts/menus.gd: pause / settings / how-to / credits overlay
-var campaign_index: int = 0 # saved campaign progress (SP story); endless never touches it
 var sp_round: int = 0 # round number inside the current best-of-3 SP duel
-var _seen_cutscenes: Dictionary = {} # master id -> true; a cutscene plays once per session
+# the story (saved; endless never touches it): story_index is the state the sailor is in
+var fight_kind: String = "" # story fight: "tutorial" | "local" (village) | "master"; "" off-story
+var story_index: int = 0
+var story_seen: int = -1 # last state whose arrival telling has played
+var tutorial_done: bool = false
+var story_ending: String = "" # "" | "home" | "stay" (chosen after beating Sarawak)
+var journey_done: bool = false # the ending was chosen once: never cleared, keeps every top on sale
+var food_active: Dictionary = {} # {"state": int, "fights_left": int}, or {} — one dish at a time
+var local_pick: int = 0 # which villager is next (not saved)
+var _pending_journal: String = "" # state id whose journal page opens as the reward on entering the hub
+var _cam_base: Transform3D = Transform3D() # battle camera pose from main.tscn
 var _hints_shown: Dictionary = {} # hint key -> true; one-shot per session
 var _pending_buy: String = "" # style id or "mat:<id>" awaiting its confirming second press
 var _last_level_ups: Array = [] # [{style, level}] from the latest _award_style_xp
@@ -816,7 +872,6 @@ var _join_token: int = 0
 
 # ---- shell state
 var _ui_theme: Theme = null # heritage theme; the UI CanvasLayer breaks theme inheritance, so each top-level control gets it
-var _title_shift: float = 0.0 # eased camera h_offset that frames the ring beside the title menu
 var howto_button: Button = null
 var settings_button: Button = null
 var credits_button: Button = null
@@ -863,6 +918,7 @@ func _ready() -> void:
 		_rush_player.bus = "SFX"
 	add_child(_rush_player)
 	_cam_fov = camera.fov
+	_cam_base = camera.transform
 	aim_arrow.visible = false
 	_polish_visuals()
 	_configure_burst()
@@ -898,8 +954,8 @@ func _theme_ui_child(n: Node) -> void:
 
 
 func _polish_visuals() -> void:
-	# One-time atmosphere rig: SSAO/SSIL, glow, AgX, fill light, floor/earth relief,
-	# lantern lights, palms. Per-arena mood (sky/fog/sun/lantern colors) comes from
+	# One-time atmosphere rig: SSAO/SSIL, glow, AgX, fill light, dish floor, lantern lights,
+	# the gelanggang ring. Per-arena mood (sky/fog/sun/lantern colors) comes from
 	# ARENA_DEFS via _apply_arena at the end and on every arena swap.
 	var we: WorldEnvironment = get_node_or_null("WorldEnvironment") as WorldEnvironment
 	if we != null and we.environment != null:
@@ -945,29 +1001,12 @@ func _polish_visuals() -> void:
 	fill.rotation_degrees = Vector3(-25.0, 150.0, 0.0)
 	add_child(fill)
 
-	# Dirt surface relief on the surrounding earth + tan arena floor (procedural, no texture files).
-	var dirt_normal: NoiseTexture2D = _make_noise_normal(0.06, 2.5)
-	var earth_mat: StandardMaterial3D = StandardMaterial3D.new()
-	earth_mat.albedo_color = Color(0.38, 0.26, 0.13)
-	earth_mat.roughness = 1.0
-	earth_mat.normal_enabled = true
-	earth_mat.normal_texture = dirt_normal
-	earth_mat.normal_scale = 1.2
-	earth_mat.uv1_scale = Vector3(14.0, 14.0, 14.0)
-	for p: String in ["Environment3D/EnvEarth", "Environment3D/EnvEarth2"]:
-		var n: MeshInstance3D = get_node_or_null(p) as MeshInstance3D
-		if n != null:
-			n.set_surface_override_material(0, earth_mat)
+	# Compacted-earth dish: the arena kit's plaster material (triplanar noise + normal).
+	# One material, retinted per arena by _apply_arena (ARENA_DEFS.floor).
 	var floor_node: MeshInstance3D = get_node_or_null("Floor") as MeshInstance3D
 	if floor_node != null:
-		var floor_mat: StandardMaterial3D = StandardMaterial3D.new()
-		floor_mat.albedo_color = Color(0.6, 0.42, 0.23) # lighter than the tops' dark wood (0.42, 0.24, 0.11)
-		floor_mat.roughness = 0.92
-		floor_mat.normal_enabled = true
-		floor_mat.normal_texture = dirt_normal
-		floor_mat.normal_scale = 0.9
-		floor_mat.uv1_scale = Vector3(9.0, 9.0, 9.0)
-		floor_node.set_surface_override_material(0, floor_mat)
+		_floor_mat = ARENA_DRESS.kind_material("Plaster", Color(0.6, 0.42, 0.23))
+		floor_node.set_surface_override_material(0, _floor_mat)
 
 	# Painted dish markings: songket medallion at the centre + a darker danger band at the rope
 	# (r 3.6-4.2). A world-space plane just above the floor, never under a top's Visual.
@@ -994,46 +1033,21 @@ func _polish_visuals() -> void:
 		var ang: float = TAU * float(i) / float(lantern_count)
 		var om: OmniLight3D = OmniLight3D.new()
 		om.name = "LanternLight%d" % i
-		om.omni_range = 3.2
+		om.omni_range = 3.8
 		om.omni_attenuation = 1.5
 		om.shadow_enabled = false
-		om.position = Vector3(cos(ang) * 4.25, 0.85, sin(ang) * 4.25)
+		om.position = Vector3(cos(ang) * 4.25, 1.6, sin(ang) * 4.25) # lantern height: pools on the dish, not a lit rope
 		add_child(om)
 		_lanterns.append(om)
 
-	# The Rim torus is a rope boundary, not a neon light — drop the emissive glow.
-	var rim: MeshInstance3D = get_node_or_null("Rim") as MeshInstance3D
-	if rim != null:
-		var rim_mat: StandardMaterial3D = StandardMaterial3D.new()
-		rim_mat.albedo_color = Color(0.34, 0.22, 0.12)
-		rim_mat.roughness = 0.8
-		rim.set_surface_override_material(0, rim_mat)
-
-	# Swap the flat palm cutouts for detailed palm models at the same spots.
-	for pp: String in ["Environment3D/EnvPalms", "Environment3D/EnvPalms2"]:
-		var pn: Node3D = get_node_or_null(pp) as Node3D
-		if pn != null: pn.visible = false
-	_default_extras = Node3D.new() # kampung-only props, hidden together with Environment3D on arena swaps
-	_default_extras.name = "DefaultExtras"
-	add_child(_default_extras)
-	var palm_scene: PackedScene = load("res://assets/gasing_palm.glb")
-	if palm_scene != null:
-		# [Godot pos (Blender base x,-y), target height, yaw] — heights/positions from the original EnvPalms clusters.
-		var palm_spots: Array = [
-			[Vector3(6.51, 0.0, -5.40), 3.62, 0.4],
-			[Vector3(2.85, 0.0, -10.54), 3.24, 1.7],
-			[Vector3(-3.08, 0.0, -8.51), 3.81, 2.9],
-			[Vector3(-7.36, 0.0, -4.27), 3.14, 4.1],
-			[Vector3(-9.52, 0.0, 4.31), 3.42, 5.2],
-			[Vector3(7.28, 0.0, 6.17), 3.24, 0.9],
-		]
-		for spot: Array in palm_spots:
-			var palm: Node3D = palm_scene.instantiate() as Node3D
-			_default_extras.add_child(palm)
-			palm.position = spot[0]
-			var s: float = float(spot[1]) / 3.4 # authored palm height
-			palm.scale = Vector3(s, s, s)
-			palm.rotation.y = float(spot[2])
+	# The gelanggang: twisted 3-strand rope, 16 carved stakes and a low timber kerb (GelKerb)
+	# on the ring boundary (r 4.15), shared by every arena.
+	var gel_scene: PackedScene = load("res://assets/gelanggang.glb") as PackedScene
+	if gel_scene != null:
+		var gel: Node3D = gel_scene.instantiate() as Node3D
+		gel.name = "Gelanggang"
+		add_child(gel)
+		ARENA_DRESS.dress(gel, {})
 	_apply_arena("kampung")
 
 
@@ -1057,45 +1071,30 @@ func _apply_arena(id: String) -> void:
 	for l: OmniLight3D in _lanterns:
 		l.light_color = def.lantern
 		l.light_energy = float(def.get("lantern_energy", 2.2))
+	if _floor_mat != null:
+		_floor_mat.albedo_color = def.get("floor", Color(0.6, 0.42, 0.23)) # compacted earth unless the arena says
 	if _arena_node != null:
 		_arena_node.queue_free()
 		_arena_node = null
 	var env_path: String = String(def.get("env", ""))
-	var use_default: bool = env_path.is_empty()
-	if not use_default:
-		if ResourceLoader.exists(env_path):
-			_arena_node = (load(env_path) as PackedScene).instantiate() as Node3D
-			add_child(_arena_node)
-			# glossy water (paddy, sea, fountain) mirrors the sun into a glare streak and the pale
-			# sky into a washed-out sheet at this camera angle: matte, deepen and de-mirror it.
-			# Edits the cached imported material once (roughness then exceeds the 0.4 test).
-			for mi: Node in _arena_node.find_children("*", "MeshInstance3D", true, false):
-				var mesh: Mesh = (mi as MeshInstance3D).mesh
-				for s: int in (mesh.get_surface_count() if mesh != null else 0):
-					var sm: StandardMaterial3D = mesh.surface_get_material(s) as StandardMaterial3D
-					if sm != null and sm.metallic < 0.1 and sm.roughness < 0.4:
-						sm.roughness = 0.5
-						sm.metallic_specular = 0.15
-						sm.albedo_color = sm.albedo_color.darkened(0.3)
-		else:
-			use_default = true # arena GLB not produced yet — the mood re-theme still lands
-	var env3d: Node3D = get_node_or_null("Environment3D") as Node3D
-	if env3d != null:
-		env3d.visible = use_default
-	if _default_extras != null:
-		_default_extras.visible = use_default
-
-
-func _make_noise_normal(freq: float, strength: float) -> NoiseTexture2D:
-	var n: FastNoiseLite = FastNoiseLite.new()
-	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	n.frequency = freq
-	var tex: NoiseTexture2D = NoiseTexture2D.new()
-	tex.noise = n
-	tex.seamless = true
-	tex.as_normal_map = true
-	tex.bump_strength = strength
-	return tex
+	if not env_path.is_empty() and ResourceLoader.exists(env_path): # a missing GLB keeps just the mood
+		_arena_node = (load(env_path) as PackedScene).instantiate() as Node3D
+		add_child(_arena_node)
+		ARENA_DRESS.dress(_arena_node, def) # rebuilt arenas: runtime material library ("Mat*" materials)
+		# legacy arenas: glossy water (paddy, sea, fountain) mirrors the sun into a glare streak
+		# and the pale sky into a washed-out sheet at this camera angle: matte, deepen and
+		# de-mirror it. Edits the cached imported material once (roughness then exceeds the 0.4 test).
+		for mi: Node in _arena_node.find_children("*", "MeshInstance3D", true, false):
+			var mesh: Mesh = (mi as MeshInstance3D).mesh
+			for s: int in (mesh.get_surface_count() if mesh != null else 0):
+				var sm: StandardMaterial3D = mesh.surface_get_material(s) as StandardMaterial3D
+				if sm != null and not sm.resource_name.begins_with("Mat") and sm.metallic < 0.1 and sm.roughness < 0.4:
+					sm.roughness = 0.5
+					sm.metallic_specular = 0.15
+					sm.albedo_color = sm.albedo_color.darkened(0.3)
+	var ground: Node3D = get_node_or_null("Ground") as Node3D
+	if ground != null:
+		ground.visible = not bool(def.get("hide_ground", false))
 
 
 func _t(key: String) -> String:
@@ -1117,6 +1116,7 @@ func _enter_state(next: State) -> void:
 	# major screen changes get the gunungan wipe: a pure overlay, nothing waits on it
 	# (not into or out of CUTSCENE: the kelir there opens and closes with its own gunungan)
 	var major: bool = not carry and (next in [State.READY, State.CRAFT, State.OVER] \
+			or (next == State.HUB and prev != State.CUTSCENE) \
 			or (next == State.WIND and prev == State.CRAFT))
 	if major and next != prev:
 		_curtain()
@@ -1128,11 +1128,10 @@ func _enter_state(next: State) -> void:
 	Engine.time_scale = 1.0
 	if _fov_tween != null and _fov_tween.is_valid():
 		_fov_tween.kill()
-	camera.fov = _cam_fov
 	_trauma = 0.0
 	if next != State.WIND and next != State.BATTLE and is_instance_valid(_banner_box):
 		_banner_box.queue_free() # battle callouts never outlive the battle
-	if (next == State.READY or next == State.OVER) and menus != null:
+	if (next == State.READY or next == State.OVER or next == State.HUB) and menus != null:
 		menus.close_pause() # no match left for the (MP, unpaused) overlay to cover
 	if next != State.CRAFT:
 		_clear_preview()
@@ -1142,6 +1141,8 @@ func _enter_state(next: State) -> void:
 		menu_top = null
 		camera.h_offset = 0.0
 		camera.v_offset = 0.0 # _process owns the offsets (trauma shake / title drift)
+	# before any screen builds: the workshop raycast, aim arrow and toasts need the battle pose
+	_set_vista(next == State.READY or next == State.HUB)
 	match next:
 		State.READY:
 			_clear_tops()
@@ -1173,7 +1174,7 @@ func _enter_state(next: State) -> void:
 		State.CUTSCENE:
 			_clear_tops()
 			_set_hud_visible(false)
-			_cutscene_begin(mini(duel_index, MASTERS.size() - 1))
+			_cutscene_begin()
 			_show_panel(cutscene_panel)
 		State.WIND:
 			_show_panel(null)
@@ -1182,7 +1183,7 @@ func _enter_state(next: State) -> void:
 			# focus lost on a round panel: its timer carried on into this round, so pause now
 			if _app_unfocused and menus != null and not net_active and not _test_mode and not _netbot:
 				menus.open_pause.call_deferred()
-			if not net_active and not endless_mode:
+			if not net_active and not _single_round():
 				sp_round += 1
 				if sp_round >= 2 and int(arena.scores.get(1, 0)) == 1 and int(arena.scores.get(2, 0)) == 1:
 					_banner(_t("match_point"), DANGER, "%s  ·  %s" % [_t("round_n") % sp_round, _score_line()]) # the decider
@@ -1201,6 +1202,21 @@ func _enter_state(next: State) -> void:
 			# (net_ended) keeps only the restart button acting as back-to-menu
 			over_menu_button.visible = not net_active or not net_ended
 			_show_panel(over_panel)
+		State.HUB:
+			_clear_tops()
+			_set_hud_visible(false)
+			aim_arrow.visible = false
+			fight_kind = ""
+			duel_index = story_index # the AI's pace follows the stop, never the number of fights farmed
+			_apply_arena(String(MASTERS[story_index].arena))
+			_hub_page = "main"
+			_refresh_hub()
+			_show_panel(hub_panel)
+			if _pending_journal != "" and menus != null:
+				# a first master win: their journal page is the reward card
+				var id: String = _pending_journal
+				_pending_journal = ""
+				menus.show_info("journal", _t("continue"), id)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1282,9 +1298,14 @@ func _on_escape() -> bool:
 			if net_active and menus != null:
 				menus.open_pause() # MP loadout between rounds: leaving needs the LEAVE MATCH confirm
 			else:
-				_leave_to_title()
+				_craft_back()
 		State.CUTSCENE:
 			_cutscene_finish()
+		State.HUB:
+			if _hub_page != "main":
+				_hub_show("main") # food stall / destinations: back to the village plaque
+			else:
+				_leave_to_title()
 		State.READY:
 			if menu_screen == MenuScreen.MP:
 				_on_mp_back_pressed()
@@ -1314,13 +1335,10 @@ func _process(delta: float) -> void:
 	var shake: float = _trauma * _trauma * 0.25
 	var h: float = shake * 0.5 * (sin(t * 47.0) + sin(t * 29.0 + 1.3))
 	var v: float = shake * 0.5 * (sin(t * 53.0 + 0.7) + sin(t * 31.0 + 2.1))
-	if state == State.READY:
+	if state == State.READY or state == State.HUB: # the vista breathes
 		h += sin(t * 0.25) * 0.25
 		v += cos(t * 0.2) * 0.1
-	# the title frames the ring beside its menu column; every other screen eases back to centre
-	var framing: float = TITLE_CAM_SHIFT if state == State.READY and menu_screen == MenuScreen.TITLE else 0.0
-	_title_shift = lerpf(_title_shift, framing, 1.0 - exp(-4.0 * delta))
-	camera.h_offset = h + _title_shift
+	camera.h_offset = h
 	camera.v_offset = v
 	# rush whirr loops exactly while the controlled top rushes (paused with the tree)
 	var rushing: bool = state == State.BATTLE and is_instance_valid(player_top) and player_top.rushing
@@ -1329,6 +1347,19 @@ func _process(delta: float) -> void:
 			_rush_player.play()
 		else:
 			_rush_player.stop()
+
+
+func _set_vista(on: bool) -> void:
+	# instant snap (the curtain or kelir hides the cut): the wide VISTA for the title and hub,
+	# else the battle pose; the vista's far landmarks get the longer shadow range
+	if on:
+		camera.look_at_from_position(VISTA_POS, VISTA_LOOK)
+		camera.fov = VISTA_FOV
+	else:
+		camera.transform = _cam_base
+		camera.fov = _cam_fov
+	if _sun != null:
+		_sun.directional_shadow_max_distance = 80.0 if on else 30.0
 
 
 func _update_menu_top() -> void:
@@ -1382,12 +1413,17 @@ var round_continue_button: Button = null
 var _round_next: Callable = Callable() # what CONTINUE triggers; the same guarded callback as the timer
 var _round_token: int = 0 # bumped per armed panel: only the latest timer may advance
 var _round_bar_tween: Tween = null
-var over_masters_caption: Label = null
-var over_masters_row: HBoxContainer = null
 var over_coin_row: HBoxContainer = null
 var over_coin_label: Label = null
 var over_best_label: Label = null
 var _endless_prev_best: int = 0 # endless best before this run (NEW BEST check)
+var hub_panel: Control = null
+var hub_title: Label = null
+var hub_stop: Label = null
+var hub_coins: Label = null
+var hub_list: VBoxContainer = null # the plaque's buttons, rebuilt by _refresh_hub for the current page
+var hub_info: Label = null # confirm prompts, the active dish, why travel is shut
+var _hub_page: String = "main" # "main" | "food" | "dest" (free travel after STAY)
 
 
 func _update_workshop_preview() -> void:
@@ -1463,14 +1499,15 @@ func _physics_process(delta: float) -> void:
 		arena.bot_tick(delta)
 
 
-func _wind_effectiveness(power: float) -> float:
+func _wind_effectiveness(power: float, lo: float = 80.0) -> float:
+	# perfect band [lo, 95]; the Kedah charm's timing buff lowers lo for the player's own launches
 	if power > 95.0:
 		return lerpf(1.0, 0.55, clampf((power - 95.0) / 5.0, 0.0, 1.0)) # graded overwind, not a cliff
 	if power < 40.0:
 		return 0.25 + 0.05 * (power / 40.0)
-	if power < 80.0:
-		return 0.3 + 0.65 * ((power - 40.0) / 40.0)
-	return 0.95 + 0.05 * ((power - 80.0) / 15.0)
+	if power < lo:
+		return 0.3 + 0.65 * ((power - 40.0) / (lo - 40.0))
+	return 0.95 + 0.05 * ((power - lo) / (95.0 - lo))
 
 
 func _flash_click_marker(point: Vector3) -> void:
@@ -1583,58 +1620,77 @@ func _finish_duel(player_wins: bool, reason: Dictionary = {}) -> void:
 	player_gauge.wobbling = false
 	foe_gauge.wobbling = false
 	_reset_round_panel()
-	var opp: Dictionary = _current_opponent()
+	var opp: Dictionary = _current_opponent() # first: the purse, beaten list and next villager move on below
 	if endless_mode and duel_index == 0:
 		_endless_prev_best = endless_best # NEW BEST is judged against the best before this run
 	round_caption.text = _duel_caption(opp)
+	if not endless_mode:
+		_story_fight_done()
 	if player_wins:
-		# the reward screen: purse + materials, XP / level-ups, and the master's top for sale
+		# the reward screen: purse (+ materials from masters and Endless waves), XP / level-ups,
+		# and on a first master win their item, their food and their top for sale
 		_play_sfx(SND_WIN, -3.0, 0.02)
 		_play_music("victory")
 		round_label.text = _t("round_win")
 		round_label.add_theme_color_override("font_color", PLAYER_COLOR)
-		var counts: Dictionary = _grant_materials(_rng.randi_range(1, 2))
-		mats_saved_label.text = _t("mats_saved")
-		mats_saved_label.visible = true
+		var counts: Dictionary = {}
+		if endless_mode or fight_kind == "master": # village purses are coins only
+			counts = _grant_materials(_rng.randi_range(1, 2))
+			mats_saved_label.text = _t("mats_saved")
+			mats_saved_label.visible = true
 		var wait: float = 4.5 # the reward panel has 5-6 lines to read; CONTINUE skips
 		var reward: int = int(opp.get("coins", 40))
 		coins += reward
 		_show_award_icons(round_award_row, counts, "+%d", reward)
 		if endless_mode:
 			endless_best = maxi(endless_best, duel_index + 1)
-		else:
-			var mid: String = String(opp.id)
-			if not defeated_masters.has(mid):
-				defeated_masters.append(mid)
-				unlock_label.text = _t("now_purchasable") % String(opp.name)
-				unlock_label.add_theme_color_override("font_color", opp.get("color", PLAYER_COLOR))
-				unlock_label.visible = true
-				_pulse(unlock_label)
-				wait = 5.5
-		duel_index += 1
-		if not endless_mode: # beating the last master starts the story over
-			campaign_index = duel_index if duel_index < MASTERS.size() else 0
+			duel_index += 1 # story fights keep duel_index = story_index: farming never speeds the AI up
+		elif fight_kind == "master" and not defeated_masters.has(String(opp.id)):
+			defeated_masters.append(String(opp.id))
+			_pending_journal = String(opp.id) # the hub opens their journal page as the reward card
+			unlock_label.text = "%s\n%s" % [_t("now_purchasable") % String(opp.name),
+				_t("master_reward") % [_loc(opp.item, "name"), _loc(opp.food, "name")]]
+			unlock_label.add_theme_color_override("font_color", opp.get("color", PLAYER_COLOR))
+			unlock_label.visible = true
+			_pulse(unlock_label)
+			wait = 12.0 # the item, the dish and the top for sale: CONTINUE still skips
 		_save_workshop()
 		_fill_round_panel(1, reason) # the medallion keeps this duel's caption until the next one starts
 		_show_panel(round_panel)
 		_arm_round_advance(wait, _after_round.bind(player_wins))
 		return
-	if not endless_mode:
-		campaign_index = 0 # a lost duel ends the run; saved now, not when the panel times out
-		_save_workshop()
-	_play_music("defeat") # a lost duel is the end of the run
+	_save_workshop()
+	_play_music("defeat")
 	round_label.text = _t("round_lose") % opp.name
-	round_label.add_theme_color_override("font_color", HT.SIDE_FOE) # the master's side colour, as on the HUD
+	round_label.add_theme_color_override("font_color", HT.SIDE_FOE) # the rival's side colour, as on the HUD
 	_fill_round_panel(2, reason)
 	_show_panel(round_panel)
 	_arm_round_advance(2.4, _after_round.bind(player_wins))
 
 
+func _story_fight_done() -> void:
+	# a story fight played out or forfeited, won or lost: a dish lasts N fights (a best-of-3 duel
+	# is one), the first match was the tutorial, and the next village match brings the next villager
+	if int(food_active.get("fights_left", 0)) > 0:
+		food_active.fights_left = int(food_active.fights_left) - 1
+		if int(food_active.fights_left) <= 0:
+			food_active = {}
+	if fight_kind == "tutorial":
+		tutorial_done = true
+	if fight_kind != "master":
+		local_pick += 1
+
+
 func _duel_caption(opp: Dictionary) -> String:
-	# "Duel 3 / 7 · Tuan Pillay" / "Wave 4 · Kapitan Ong ★"
+	# "Wave 4 · Ah Kow ★" / "Perlis · Master duel · Pak Latif"
 	if endless_mode:
 		return "%s  ·  %s" % [_t("wave_n") % (duel_index + 1), String(opp.name)]
-	return "%s  ·  %s" % [_t("duel_n") % [mini(duel_index + 1, MASTERS.size()), MASTERS.size()], String(opp.name)]
+	return "%s  ·  %s" % [_t("hud_story") % [_loc(opp, "region"), _kind_text()], String(opp.name)]
+
+
+func _kind_text() -> String:
+	# "First match" / "Village match" / "Master duel"; "" off-story
+	return _t("kind_" + fight_kind) if fight_kind != "" else ""
 
 
 func _tally_match_mats(counts: Dictionary) -> void:
@@ -1697,49 +1753,44 @@ func _pulse(l: CanvasItem) -> void:
 func _after_round(player_wins: bool) -> void:
 	if state != State.ROUND_OVER:
 		return
-	if not player_wins:
-		_finish_run(false)
-	elif not endless_mode and duel_index >= MASTERS.size():
-		_finish_run(true)
+	if endless_mode:
+		if player_wins:
+			_enter_state(State.CRAFT)
+		else:
+			_finish_run()
+	elif fight_kind == "tutorial":
+		_enter_state(State.HUB)
+		_show_menu_notice(_t("hub_tutorial_done") % String(MASTERS[0].name), SONGKET_GOLD)
+	elif fight_kind == "master" and player_wins:
+		if _pending_journal == String(MASTERS[-1].id):
+			# the last master's first fall: the ship is mended, then the choice waits in the hub
+			_play_cutscene(SD.ENDING, _t("ending_title"), _enter_state.bind(State.HUB))
+		else:
+			_enter_state(State.HUB)
 	else:
-		_enter_state(State.CRAFT)
+		_enter_state(State.CRAFT) # village matches and master losses: one click to fight again
 
 
-func _finish_run(won: bool) -> void:
-	run_won = won # campaign_index was already reset and saved by _finish_duel
-	_play_sfx(SND_WIN if won else SND_LOSE, 0.0, 0.0)
-	if won:
-		_play_music("victory") # champion; a loss already played its stinger at the duel panel
+func _finish_run() -> void:
+	# a lost Endless wave ends the run (story fights never end one; MP has its match-over)
+	_play_sfx(SND_LOSE, 0.0, 0.0)
 	_reset_over_panel()
-	# coins this run follow from how far it got: duel_index = duels won
+	# coins this run follow from how far it got: duel_index = waves won
 	var earned: int = 0
 	for i: int in duel_index:
-		earned += int((_endless_opponent(i) if endless_mode else MASTERS[i]).coins)
+		earned += int(_endless_opponent(i).coins)
 	over_coin_label.text = _t("run_coins") % earned
 	over_coin_row.visible = earned > 0
-	if endless_mode:
-		over_title.text = _t("over_lose")
-		over_title.add_theme_color_override("font_color", DANGER)
-		over_stats.text = _t("endless_over") % duel_index
-		var new_best: bool = duel_index > _endless_prev_best
-		over_best_label.text = _t("new_best") if new_best else _t("endless_best_line") % endless_best
-		over_best_label.add_theme_color_override("font_color", PLAYER_COLOR if new_best else CREAM_MUTED)
-		over_best_label.add_theme_font_size_override("font_size", 30 if new_best else 18)
-		over_best_label.visible = true
-		if new_best:
-			_pulse(over_best_label)
-	else:
-		over_title.text = _t("over_win") if won else _t("over_lose")
-		over_title.add_theme_color_override("font_color", PLAYER_COLOR if won else DANGER)
-		over_stats.text = _t("duels_won") % [duel_index, MASTERS.size()]
-		over_masters_caption.text = _t("masters_beaten")
-		over_masters_caption.visible = true
-		over_masters_row.visible = true
-		for i: int in over_masters_row.get_child_count():
-			var cell: Control = over_masters_row.get_child(i) as Control
-			cell.modulate = Color(HT.INACTIVE, 0.25) # unlit lamp
-			if i < duel_index: # beaten masters light up one after another
-				create_tween().tween_property(cell, "modulate", Color.WHITE, 0.3).set_delay(0.3 + 0.12 * i)
+	over_title.text = _t("over_lose")
+	over_title.add_theme_color_override("font_color", DANGER)
+	over_stats.text = _t("endless_over") % duel_index
+	var new_best: bool = duel_index > _endless_prev_best
+	over_best_label.text = _t("new_best") if new_best else _t("endless_best_line") % endless_best
+	over_best_label.add_theme_color_override("font_color", PLAYER_COLOR if new_best else CREAM_MUTED)
+	over_best_label.add_theme_font_size_override("font_size", 30 if new_best else 18)
+	over_best_label.visible = true
+	if new_best:
+		_pulse(over_best_label)
 	_enter_state(State.OVER)
 
 
@@ -1749,8 +1800,6 @@ func _reset_over_panel() -> void:
 	over_mats_title.visible = false
 	over_award_row.visible = false
 	over_bonus_label.visible = false
-	over_masters_caption.visible = false
-	over_masters_row.visible = false
 	over_coin_row.visible = false
 	over_best_label.visible = false
 	over_best_label.modulate.a = 1.0
@@ -1760,33 +1809,115 @@ func _reset_over_panel() -> void:
 	restart_button.disabled = false
 
 
-# ---------------------------------------------------------------- run / workshop
+# ---------------------------------------------------------------- run / workshop / story
 
 func _reset_run() -> void:
 	duel_index = 0
-	run_won = false
+	fight_kind = ""
+
+
+func _single_round() -> bool:
+	# Endless waves, village matches and the tutorial are one round; master duels are best of 3
+	return endless_mode or fight_kind != "master"
+
+
+func _loc(d: Dictionary, field: String) -> String:
+	# story text: d[field_<lang>], falling back to English
+	return String(d.get(field + "_" + lang, d.get(field + "_en", "")))
 
 
 func _current_opponent() -> Dictionary:
 	if endless_mode:
 		return _endless_opponent(duel_index)
-	return MASTERS[mini(duel_index, MASTERS.size() - 1)]
+	var i: int = clampi(story_index, 0, MASTERS.size() - 1)
+	if fight_kind != "master":
+		return _local_opponent(i, local_pick)
+	var m: Dictionary = MASTERS[i]
+	if not defeated_masters.has(String(m.id)):
+		return m
+	var rematch: Dictionary = m.duplicate()
+	rematch.coins = _master_purse(m)
+	return rematch
+
+
+func _local_opponent(i: int, k: int) -> Dictionary:
+	# a villager of state i, deterministic from (i, k): base tops, no buffs, one round, the
+	# state's arena. k cycles the three locals: steady striker, spinner, aggressive striker.
+	var m: Dictionary = MASTERS[i]
+	var slot: int = k % 3
+	var who: Dictionary = m.locals[slot]
+	var j: float = float(mini(i, 8))
+	var stats: Array = [[2.0, 60.0, 58.0], [1.3, 84.0, 72.0], [2.2, 58.0, 56.0]][slot]
+	var o: Dictionary = {"id": "%s_local%d" % [m.id, slot], "name": String(who.name),
+		"region_en": m.region_en, "region_ms": m.region_ms, "mesh": String(who.mesh),
+		"shape": String(STYLE_DEFS[String(who.mesh)].shape), "color": HT.SIDE_FOE, "arena": m.arena,
+		"mass": float(stats[0]) + 0.03 * j, "spin_reserve": float(stats[1]) + 2.0 * j, "balance": stats[2],
+		"wind_mean": minf(58.0 + 2.0 * j, 74.0), "wind_dev": 12.0, "aggressive": slot == 2,
+		"think": 1.6 - 0.05 * j, "coins": 12 + 3 * i, "reserves": ["cikros", "pakdin"]}
+	if fight_kind == "tutorial": # the first match is gentle: a slow, plain jantung
+		o.merge({"mass": 2.0, "spin_reserve": 60.0, "balance": 58.0, "wind_mean": 58.0, "wind_dev": 8.0,
+			"think": 1.8, "aggressive": false}, true)
+	return o
 
 
 func _endless_opponent(wave: int) -> Dictionary:
-	# cycle the masters with escalating multipliers; caps keep late waves beatable-but-brutal
-	var m: Dictionary = MASTERS[wave % MASTERS.size()].duplicate()
+	# cycle the 13 masters then the KL boss with escalating multipliers; caps keep late waves
+	# beatable-but-brutal. The purse stays below the story's, so village matches are the farm.
+	var roster: Array = MASTERS + [SD.KL_BOSS]
+	var m: Dictionary = (roster[wave % roster.size()] as Dictionary).duplicate()
 	@warning_ignore("integer_division")
-	var tier: int = wave / MASTERS.size()
+	var tier: int = wave / roster.size()
 	if tier > 0:
 		m.name = "%s %s" % [String(m.name), "★".repeat(mini(tier, 3))]
 	m.wind_mean = minf(float(m.wind_mean) + 2.0 * wave, 94.0)
 	m.wind_dev = maxf(float(m.wind_dev) - 0.4 * wave, 2.0)
 	m.spin_reserve = minf(float(m.spin_reserve) + 3.0 * tier, 130.0)
-	m.mass = minf(float(m.mass) + 0.05 * wave, 3.4)
+	# KL gets +0.15 so the boss is never lighter than Jarat (capped 3.4) on the same lap
+	m.mass = minf(float(m.mass) + 0.05 * wave + (0.15 if m.id == "kl" else 0.0), 3.4)
 	m.aggressive = bool(m.aggressive) or wave >= 4
-	m.coins = 15 + 8 * wave
+	# the player has no story buffs in Endless: lap 1 rides the stat ramp alone, later laps
+	# bring the masters' buffs back at 35% per lap, each key under SD.BUFF_CAPS
+	var buffs: Dictionary = {}
+	if tier > 0:
+		for k: String in m.buffs:
+			buffs[k] = minf(float(m.buffs[k]) * 0.35 * tier, float(SD.BUFF_CAPS.get(k, 0.0)))
+	m.buffs = buffs
+	m.coins = 8 + 4 * wave
 	return m
+
+
+func _active_buffs() -> Dictionary:
+	# the player's story buffs: items of every beaten state + the active dish, each key clamped
+	# to SD.BUFF_CAPS. Village and master fights only (never the tutorial, Endless or MP).
+	if net_active or endless_mode or fight_kind not in ["local", "master"]:
+		return {}
+	var sources: Array = []
+	for m: Dictionary in MASTERS:
+		if defeated_masters.has(String(m.id)):
+			sources.append(m.item.buffs)
+	if int(food_active.get("fights_left", 0)) > 0:
+		sources.append(MASTERS[int(food_active.state)].food.buffs)
+	var out: Dictionary = {}
+	for b: Dictionary in sources:
+		for k: String in b:
+			out[k] = minf(float(out.get(k, 0.0)) + float(b[k]), float(SD.BUFF_CAPS.get(k, 0.0)))
+	return out
+
+
+func _ending_pending() -> bool:
+	# the last master is beaten and the sailor hasn't chosen: sail home, or stay
+	return defeated_masters.has(String(MASTERS[-1].id)) and story_ending == ""
+
+
+func _reset_story() -> void:
+	# NEW JOURNEY after sailing home: the story starts over, the wallet (coins, tops, materials, XP) stays
+	story_index = 0
+	story_seen = -1
+	tutorial_done = false
+	story_ending = ""
+	food_active = {}
+	defeated_masters = []
+	local_pick = 0
 
 
 func _style_accent(id: String) -> Color:
@@ -1798,7 +1929,7 @@ func _master_index(style_id: String) -> int:
 	for i: int in MASTERS.size():
 		if String(MASTERS[i].mesh) == style_id:
 			return i
-	return -1 # default/old-boss style, not gated behind a master
+	return -1 # base style or the Endless boss's (kl), not gated behind a story master
 
 
 func _style_battle_stats(id: String) -> Dictionary:
@@ -1878,7 +2009,12 @@ func _load_workshop(source: ConfigFile = null) -> void:
 	defeated_masters = []
 	style_accents = {}
 	endless_best = 0
-	campaign_index = 0
+	story_index = 0
+	story_seen = -1
+	tutorial_done = false
+	story_ending = ""
+	journey_done = false
+	food_active = {}
 	if source == null and (_test_mode or _netbot):
 		return
 	var cf: ConfigFile = source if source != null else _read_cfg(SAVE_PATH)
@@ -1914,11 +2050,6 @@ func _load_workshop(source: ConfigFile = null) -> void:
 	var c: Variant = cf.get_value("workshop", "coins", 0)
 	if c is int or c is float:
 		coins = maxi(int(c), 0)
-	var dv: Variant = cf.get_value("workshop", "defeated", [])
-	if dv is Array:
-		for mid: Variant in dv:
-			if _master_index(String(mid)) >= 0 and not defeated_masters.has(String(mid)):
-				defeated_masters.append(String(mid))
 	var a: Variant = cf.get_value("workshop", "accents", {})
 	if a is Dictionary:
 		for k: Variant in a:
@@ -1937,9 +2068,10 @@ func _load_workshop(source: ConfigFile = null) -> void:
 	var saved_difficulty: Variant = cf.get_value("workshop", "difficulty", 0)
 	if (saved_difficulty is int or saved_difficulty is float) and is_finite(float(saved_difficulty)):
 		difficulty = int(clampf(float(saved_difficulty), 0.0, 2.0))
-	var ci: Variant = cf.get_value("workshop", "campaign_index", 0)
-	if (ci is int or ci is float) and is_finite(float(ci)):
-		campaign_index = clampi(int(ci), 0, MASTERS.size() - 1)
+	# v4: the 13-state story. v1-3 saves (the old 7-master campaign) keep the whole wallet
+	# above, owned master tops included, and start the new story from the shipwreck.
+	if _saved_int(cf.get_value("workshop", "version", 1), 1) >= 4:
+		_load_story(cf)
 	loadout[0] = selected_shape # old saves keep their selected top in slot one
 	var saved_loadout: Variant = cf.get_value("workshop", "loadout", [])
 	if saved_loadout is Array:
@@ -1950,11 +2082,46 @@ func _load_workshop(source: ConfigFile = null) -> void:
 	selected_shape = loadout[0]
 
 
+func _load_story(cf: ConfigFile) -> void:
+	# v4 story keys, each validated against story_data: the beaten states (unknown/old ids
+	# dropped), never further than the first unbeaten master, an ending only after the last
+	var dv: Variant = cf.get_value("workshop", "defeated", [])
+	if dv is Array:
+		for mid: Variant in dv:
+			if _master_index(String(mid)) >= 0 and not defeated_masters.has(String(mid)):
+				defeated_masters.append(String(mid))
+	var ending: Variant = cf.get_value("workshop", "story_ending", "")
+	if ending is String and ending in ["home", "stay"] and defeated_masters.has(String(MASTERS[-1].id)):
+		story_ending = ending
+	var jd: Variant = cf.get_value("workshop", "journey_done", false)
+	journey_done = (jd is bool and jd) or story_ending != "" # saves from before the flag: an ending was chosen
+	var first_unbeaten: int = MASTERS.size() - 1 # all beaten: free to be anywhere
+	for i: int in MASTERS.size():
+		if not defeated_masters.has(String(MASTERS[i].id)):
+			first_unbeaten = i
+			break
+	story_index = mini(clampi(_saved_int(cf.get_value("workshop", "story_index", 0), 0), 0, MASTERS.size() - 1), first_unbeaten)
+	story_seen = clampi(_saved_int(cf.get_value("workshop", "story_seen", -1), -1), -1, story_index)
+	var td: Variant = cf.get_value("workshop", "tutorial_done", false)
+	tutorial_done = (td is bool and td) or story_index > 0
+	var fa: Variant = cf.get_value("workshop", "food_active", {})
+	if fa is Dictionary:
+		var fi: int = _saved_int((fa as Dictionary).get("state"), -1)
+		var left: int = _saved_int((fa as Dictionary).get("fights_left"), 0)
+		if fi >= 0 and fi < MASTERS.size() and left > 0 and defeated_masters.has(String(MASTERS[fi].id)):
+			food_active = {"state": fi, "fights_left": mini(left, int(MASTERS[fi].food.fights))}
+
+
+static func _saved_int(v: Variant, fallback: int) -> int:
+	# a saved number, or the fallback when it is missing, not a number or not finite
+	return int(v) if (v is int or v is float) and is_finite(float(v)) else fallback
+
+
 func _save_workshop() -> void:
 	if _netbot or _test_mode:
 		return # two local netbot instances share user:// — don't clobber the real save
 	var cf: ConfigFile = ConfigFile.new()
-	cf.set_value("workshop", "version", 3)
+	cf.set_value("workshop", "version", 4)
 	cf.set_value("workshop", "unlocked", unlocked_styles)
 	cf.set_value("workshop", "selected", selected_shape)
 	cf.set_value("workshop", "materials", materials_owned)
@@ -1966,7 +2133,12 @@ func _save_workshop() -> void:
 	cf.set_value("workshop", "style_xp", style_xp)
 	cf.set_value("workshop", "loadout", loadout)
 	cf.set_value("workshop", "difficulty", difficulty)
-	cf.set_value("workshop", "campaign_index", campaign_index)
+	cf.set_value("workshop", "story_index", story_index)
+	cf.set_value("workshop", "story_seen", story_seen)
+	cf.set_value("workshop", "tutorial_done", tutorial_done)
+	cf.set_value("workshop", "story_ending", story_ending)
+	cf.set_value("workshop", "journey_done", journey_done)
+	cf.set_value("workshop", "food_active", food_active)
 	_write_cfg(cf, SAVE_PATH) # non-fatal: _write_cfg warns
 
 
@@ -2039,27 +2211,27 @@ func _on_fight_pressed() -> void:
 	if net_active:
 		arena.submit_loadout()
 		return
+	_start_sp_fight()
+
+
+func _start_sp_fight() -> void:
 	if menus != null and not menus.seen_howto and not _test_mode:
 		# the very first fight: the how-to cards come first, and closing them starts it
 		menus.show_info("howto", _t("howto_go"))
 		menus.closed.connect(_on_howto_offer_closed, CONNECT_ONE_SHOT)
 		return
-	# a new SP duel (best of 3; endless waves are single rounds)
+	# a new SP fight (master duels best of 3; Endless waves, village matches and the tutorial one round)
 	arena.scores.clear()
 	sp_round = 0
-	var opp: Dictionary = _current_opponent()
-	_apply_arena(String(opp.get("arena", "kampung"))) # swap happens behind the kelir
-	var id: String = String(opp.id)
-	if not endless_mode and CUTSCENES.has(id) and not _seen_cutscenes.has(id):
-		_seen_cutscenes[id] = true
-		_enter_state(State.CUTSCENE)
-	else:
-		_enter_state(State.WIND)
+	_apply_arena(String(_current_opponent().get("arena", "kampung"))) # swaps behind the curtain or kelir
+	_enter_state(State.WIND)
 
 
 func _on_howto_offer_closed() -> void:
 	if state == State.CRAFT:
 		_on_fight_pressed()
+	elif state == State.CUTSCENE: # the tutorial launches straight from the arrival telling
+		_start_sp_fight()
 
 
 static func _duel_outcome(scores: Dictionary) -> int:
@@ -2073,7 +2245,7 @@ static func _duel_outcome(scores: Dictionary) -> int:
 
 func _on_lang_pressed(code: String) -> void:
 	if not STRINGS.has(code):
-		return # a hand-edited settings.cfg: CUTSCENES/MASTERS/STRINGS index by lang directly
+		return # a hand-edited settings.cfg: STRINGS and the story's _<lang> fields need a known code
 	lang = code
 	_apply_language()
 	if menus != null:
@@ -2085,10 +2257,22 @@ func _craft_viewed() -> String:
 
 
 func _can_buy(id: String) -> bool:
-	# locked, on sale (not behind an unbeaten master), affordable; SP only
-	var gate: int = _master_index(id)
+	# locked, on sale (not behind an unbeaten master or the unfinished journey), affordable; SP only
 	return not unlocked_styles.has(id) and not net_active and coins >= int(STYLE_DEFS[id].get("price", 0)) \
-		and not (gate >= 0 and not defeated_masters.has(String(MASTERS[gate].id)))
+		and _shop_gate(id) == ""
+
+
+func _shop_gate(id: String) -> String:
+	# why a top isn't for sale yet ("" when it is): a story master's top until they fall,
+	# the Endless boss's (kl) until the journey has ended; after one finished journey, every top
+	if journey_done:
+		return ""
+	var gate: int = _master_index(id)
+	if gate >= 0 and not defeated_masters.has(String(MASTERS[gate].id)):
+		return _t("locked_hint") % String(MASTERS[gate].name)
+	if id == "kl" and story_ending == "":
+		return _t("locked_story")
+	return ""
 
 
 func _craft_cycle(dir: int) -> void:
@@ -2682,11 +2866,11 @@ func _update_top_bar() -> void:
 	if net_active:
 		duel_label.text = _t("hud_ffa") % NET_MATCH_TARGET
 		return
-	var region: String = String(_current_opponent().get("region_" + lang, ""))
+	var region: String = _loc(_current_opponent(), "region")
 	if endless_mode:
 		duel_label.text = _t("hud_wave") % [duel_index + 1, region]
 	else:
-		duel_label.text = _t("hud_duel") % [mini(duel_index + 1, MASTERS.size()), MASTERS.size(), region]
+		duel_label.text = _t("hud_story") % [region, _kind_text()] # "Perlis · Village match"
 
 
 func _apply_language() -> void:
@@ -2745,11 +2929,15 @@ func _apply_language() -> void:
 		b.modulate = Color.WHITE if code == lang else Color(INACTIVE, 0.7)
 	_update_top_bar()
 	_refresh_craft()
+	_refresh_hub()
 
 
 func _refresh_sp_button() -> void:
-	# title-screen live text: CONTINUE label + the progress line (masters beaten, endless best)
-	sp_button.text = (_t("continue_duel") % [campaign_index + 1, MASTERS.size()]) if campaign_index > 0 else _t("single_player")
+	# title-screen live text: NEW JOURNEY / CONTINUE · <state> (n/13) + the progress line
+	# (masters beaten, endless best); a story that sailed home starts a new journey
+	var fresh: bool = story_ending == "home" or (story_index == 0 and story_seen < 0)
+	sp_button.text = _t("sp_new") if fresh \
+		else _t("sp_continue") % [_loc(MASTERS[story_index], "region"), story_index + 1, MASTERS.size()]
 	ready_progress_pips.wins = defeated_masters.size()
 	ready_progress_pips.queue_redraw()
 	ready_progress.text = _t("progress_masters") % [defeated_masters.size(), MASTERS.size()]
@@ -3110,19 +3298,24 @@ func _build_ui() -> void:
 		_strip_labels.append(verb)
 	battle_hint = strip
 
-	menu_notice = _mk_label("", 15, DANGER)
-	menu_notice.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	menu_notice.offset_left = -420.0
-	menu_notice.offset_right = 420.0
-	menu_notice.offset_top = -80.0
-	menu_notice.offset_bottom = -50.0
+	# the notice line sits on a carved HUD plate (as the hints do), so it reads over any scenery;
+	# the centring row hugs the plate to the text whatever its length
+	var notice_row: CenterContainer = CenterContainer.new()
+	notice_row.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	notice_row.offset_top = -92.0
+	notice_row.offset_bottom = -50.0
+	notice_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(notice_row)
+	menu_notice = _mk_label("", 17, DANGER)
+	menu_notice.add_theme_stylebox_override("normal", _hud_plate())
 	menu_notice.modulate.a = 0.0
-	ui.add_child(menu_notice)
+	notice_row.add_child(menu_notice)
 
 	_build_ready_panel()
 	_build_mp_panel()
 	_build_wait_panel()
 	_build_craft_panel()
+	_build_hub_panel() # before the kelir: the hub fades out under the cutscene's instant curtain
 	_build_cutscene_panel()
 	_build_round_panel()
 	_build_over_panel()
@@ -3437,8 +3630,10 @@ func _show_menu_screen(screen: MenuScreen) -> void:
 			_show_panel(wait_panel)
 
 
-func _show_menu_notice(text: String) -> void:
+func _show_menu_notice(text: String, color: Color = DANGER) -> void:
+	# errors in the danger colour; a story word (the master's notice) in songket gold
 	menu_notice.text = text
+	menu_notice.add_theme_color_override("font_color", color)
 	menu_notice.modulate.a = 1.0
 	if _notice_tween != null and _notice_tween.is_valid():
 		_notice_tween.kill()
@@ -3475,9 +3670,19 @@ func _lan_display_ip() -> String:
 
 
 func _on_single_player_pressed() -> void:
+	# NEW JOURNEY / CONTINUE: the story picks up where it was saved — an unseen arrival (or an
+	# unfinished first match) replays the telling, else the village hub; sailed home = start over
 	endless_mode = false
-	duel_index = campaign_index # CONTINUE resumes the saved campaign
-	_enter_state(State.CRAFT)
+	fight_kind = ""
+	if story_ending == "home":
+		_reset_story()
+	duel_index = story_index
+	if story_seen < story_index or not tutorial_done:
+		_play_arrival()
+	elif _ending_pending(): # closed before the choice: the ship's mending is told again (skippable)
+		_play_cutscene(SD.ENDING, _t("ending_title"), _enter_state.bind(State.HUB))
+	else:
+		_enter_state(State.HUB)
 
 
 func _on_endless_pressed() -> void:
@@ -3866,7 +4071,7 @@ func _build_craft_panel() -> void:
 	fight_button.add_theme_font_size_override("font_size", 20)
 	fight_button.pressed.connect(_on_fight_pressed)
 	craft_back_button = _mk_button("", WOOD_DARK, true)
-	craft_back_button.pressed.connect(_leave_to_title) # SP: title, campaign kept; MP: leave lobby -> title
+	craft_back_button.pressed.connect(_craft_back) # story: the village hub; Endless: title; MP: leave lobby -> title
 	var btn_row: HBoxContainer = HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 16)
 	btn_row.add_child(craft_back_button)
@@ -3920,6 +4125,260 @@ func _coin_icon(px: float) -> Control:
 	return c
 
 
+func _build_hub_panel() -> void:
+	# the village hub: a carved plaque in the title's left column over the state's arena in the
+	# vista pose — where the sailor is and the purse, then the buttons _refresh_hub builds
+	hub_panel = Control.new()
+	hub_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hub_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hub_panel.visible = false
+	ui.add_child(hub_panel)
+	_all_panels.append(hub_panel)
+	var col: VBoxContainer = VBoxContainer.new()
+	col.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	col.offset_left = 64.0
+	col.offset_right = 504.0
+	col.offset_top = 20.0
+	col.offset_bottom = -20.0
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hub_panel.add_child(col)
+	var plaque: PanelContainer = _mk_panel_box(true, 6.0)
+	plaque.self_modulate = Color(1.0, 1.0, 1.0, 0.86) # translucent like the title's: the vista glows through
+	plaque.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(plaque)
+	var v: VBoxContainer = VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	v.custom_minimum_size = Vector2(360.0, 0.0)
+	plaque.add_child(v)
+	v.add_child(_mk_gunungan(30.0))
+	hub_title = _mk_title("", 40)
+	v.add_child(hub_title)
+	var row: HBoxContainer = HBoxContainer.new() # "Stop 3 / 13" ... purse
+	row.add_theme_constant_override("separation", 8)
+	v.add_child(row)
+	hub_stop = _mk_label("", 15, CREAM_MUTED)
+	hub_stop.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	hub_stop.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(hub_stop)
+	row.add_child(_coin_icon(22.0))
+	hub_coins = _mk_title("", 22)
+	row.add_child(hub_coins)
+	var unit: Label = _mk_label("duit", 14, CREAM_MUTED)
+	unit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(unit)
+	v.add_child(_mk_divider())
+	hub_list = VBoxContainer.new()
+	hub_list.add_theme_constant_override("separation", 6)
+	v.add_child(hub_list)
+	hub_info = _mk_label("", 14, CREAM_MUTED)
+	hub_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hub_info.custom_minimum_size = Vector2(360.0, 0.0)
+	v.add_child(hub_info)
+
+
+func _refresh_hub() -> void:
+	# rebuilds the plaque for its page: "main" (the ending choice once pending, village match,
+	# challenge / rematch, food, journal, travel, menu), "food" (dishes of beaten states) or
+	# "dest" (free travel after STAY); the info line shows the active dish or why travel is shut
+	if hub_list == null:
+		return
+	var m: Dictionary = MASTERS[story_index]
+	var beaten: bool = defeated_masters.has(String(m.id))
+	hub_title.text = _loc(m, "region")
+	hub_title.add_theme_color_override("font_color", m.get("color", PLAYER_COLOR))
+	hub_stop.text = _t("hub_stop") % [story_index + 1, MASTERS.size()]
+	hub_coins.text = str(coins)
+	for c: Node in hub_list.get_children():
+		hub_list.remove_child(c) # detach now so old and new rows never share a frame
+		c.queue_free()
+	hub_info.text = ""
+	if int(food_active.get("fights_left", 0)) > 0:
+		hub_info.text = _t("hub_food_active") % [_loc(MASTERS[int(food_active.state)].food, "name"), int(food_active.fights_left)]
+	match _hub_page:
+		"food":
+			hub_list.add_child(_mk_title(_t("hub_food"), 24))
+			# the dishes scroll (7 rows show) so a late-journey stall never pushes BACK off-screen
+			var sc: ScrollContainer = ScrollContainer.new()
+			sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+			hub_list.add_child(sc)
+			var dl: VBoxContainer = VBoxContainer.new()
+			dl.add_theme_constant_override("separation", 6)
+			dl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			sc.add_child(dl)
+			for i: int in MASTERS.size():
+				if not defeated_masters.has(String(MASTERS[i].id)):
+					continue
+				var food: Dictionary = MASTERS[i].food
+				var eating: bool = int(food_active.get("state", -1)) == i and int(food_active.get("fights_left", 0)) > 0
+				var b: Button = _hub_button(_t("hub_food_price") % [_loc(food, "name"), int(food.price), int(food.fights)],
+					PLAYER_COLOR if eating else WOOD_AMBER, _on_food_pressed.bind(i), false, dl)
+				b.tooltip_text = _loc(food, "desc")
+			sc.custom_minimum_size.y = minf(dl.get_combined_minimum_size().y, 336.0) # no gap under a short list
+			if defeated_masters.is_empty():
+				hub_info.text = _t("hub_food_none")
+			_hub_button(_t("back"), WOOD_DARK, _hub_show.bind("main"), true)
+		"dest":
+			hub_list.add_child(_mk_title(_t("hub_dest"), 24))
+			var grid: GridContainer = GridContainer.new()
+			grid.columns = 2
+			grid.add_theme_constant_override("h_separation", 6)
+			grid.add_theme_constant_override("v_separation", 6)
+			hub_list.add_child(grid)
+			for i: int in MASTERS.size():
+				var b: Button = _mk_button(_loc(MASTERS[i], "region"), PLAYER_COLOR if i == story_index else WOOD_AMBER)
+				b.add_theme_font_size_override("font_size", 15)
+				b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				b.disabled = i == story_index
+				b.pressed.connect(_on_dest_pressed.bind(i))
+				grid.add_child(b)
+			_hub_button(_t("back"), WOOD_DARK, _hub_show.bind("main"), true)
+		_:
+			if _ending_pending(): # the ship is mended: the choice waits here until it is made
+				var ask: Label = _mk_label(_t("ending_prompt"), 16, SONGKET_GOLD)
+				ask.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				ask.custom_minimum_size = Vector2(360.0, 0.0)
+				hub_list.add_child(ask)
+				var pick: HBoxContainer = HBoxContainer.new()
+				pick.add_theme_constant_override("separation", 8)
+				hub_list.add_child(pick)
+				for choice: Array in [[false, "ending_home", PLAYER_COLOR], [true, "ending_stay", WOOD_AMBER]]:
+					var cb: Button = _mk_button(_t(choice[1]), choice[2])
+					cb.custom_minimum_size.y = 46.0
+					cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+					cb.pressed.connect(_on_ending_choice.bind(choice[0]))
+					pick.add_child(cb)
+				hub_list.add_child(_mk_divider())
+			var villager: Dictionary = _local_opponent(story_index, local_pick)
+			_hub_button(_t("hub_village"), WOOD_AMBER, _on_hub_fight_pressed.bind("local"))
+			_hub_caption(_t("hub_next_villager") % [String(villager.name), int(villager.coins)])
+			_hub_button(_t("hub_rematch" if beaten else "hub_challenge") % String(m.name).to_upper(), PLAYER_COLOR,
+				_on_hub_fight_pressed.bind("master"))
+			_hub_caption(_t("hub_master_info") % _master_purse(m))
+			var pair: HBoxContainer = HBoxContainer.new()
+			pair.add_theme_constant_override("separation", 8)
+			hub_list.add_child(pair)
+			for entry: Array in [["hub_food", _hub_show.bind("food")], ["hub_journal", _on_hub_journal_pressed]]:
+				var pb: Button = _mk_button(_t(entry[0]), WOOD_AMBER)
+				pb.custom_minimum_size.y = 40.0
+				pb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				pb.pressed.connect(entry[1])
+				pair.add_child(pb)
+			if story_ending == "stay":
+				_hub_button(_t("hub_travel_free"), PLAYER_COLOR, _hub_show.bind("dest"))
+			elif not (m.transport as Dictionary).is_empty():
+				var t: Dictionary = m.transport
+				var tb: Button = _hub_button(_t("hub_travel") % [_loc(MASTERS[story_index + 1], "region").to_upper(), int(t.fare)],
+					PLAYER_COLOR if beaten else WOOD_AMBER, _on_travel_pressed)
+				tb.disabled = not beaten
+				_hub_caption(_t("hub_travel_by") % _loc(t, "name"))
+				if not beaten: # under the active dish's line, if there is one
+					hub_info.text = (hub_info.text + "\n" if not hub_info.text.is_empty() else "") + _t("hub_travel_locked") % String(m.name)
+			_hub_button(_t("hub_menu"), WOOD_DARK, _on_hub_menu_pressed, true)
+
+
+func _hub_button(text: String, base: Color, on_press: Callable, light_text: bool = false, parent: Container = null) -> Button:
+	var b: Button = _mk_button(text, base, light_text)
+	b.add_theme_font_size_override("font_size", 18)
+	b.custom_minimum_size.y = 42.0
+	b.pressed.connect(on_press)
+	(parent if parent != null else hub_list).add_child(b)
+	return b
+
+
+func _hub_caption(text: String) -> void:
+	# the small line under a hub button: who's next, the purse, the transport
+	hub_list.add_child(_mk_label(text, 13, CREAM_MUTED))
+
+
+func _hub_show(page: String) -> void:
+	_hub_page = page
+	_pending_buy = "" # a confirm prompt belongs to the page it was asked on
+	_refresh_hub()
+
+
+func _master_purse(m: Dictionary) -> int:
+	# a master's first defeat pays the full purse; a rematch 40%, rounded to 5
+	return roundi(float(m.coins) * 0.4 / 5.0) * 5 if defeated_masters.has(String(m.id)) else int(m.coins)
+
+
+func _on_hub_fight_pressed(kind: String) -> void:
+	# VILLAGE MATCH / CHALLENGE: the loadout first (HUB -> CRAFT -> WIND)
+	fight_kind = kind
+	_enter_state(State.CRAFT)
+
+
+func _on_hub_journal_pressed() -> void:
+	menus.show_info("journal", "", String(MASTERS[story_index].id))
+
+
+func _on_hub_menu_pressed() -> void:
+	menus.open_pause() # how-to, settings, journal, and MAIN MENU (the way to the title)
+
+
+func _on_food_pressed(i: int) -> void:
+	# one dish at a time (a new one replaces it); buying takes a confirming second press
+	var food: Dictionary = MASTERS[i].food
+	var price: int = int(food.price)
+	if coins < price:
+		hub_info.text = _t("need_coins") % [price, coins]
+		return
+	if _pending_buy != "food:%d" % i:
+		_pending_buy = "food:%d" % i
+		hub_info.text = _t("buy_confirm") % [_loc(food, "name"), price] + "\n" + _loc(food, "desc") # what it does, before paying
+		return
+	_pending_buy = ""
+	coins -= price
+	food_active = {"state": i, "fights_left": int(food.fights)}
+	_play_sfx(SND_WIN, -6.0, 0.05)
+	_save_workshop()
+	_refresh_hub()
+	hub_info.text = _t("hub_food_bought") % [_loc(food, "name"), int(food.fights)]
+
+
+func _on_travel_pressed() -> void:
+	# pay the fare to the next state (confirmed on a second press), then ride on: its telling plays
+	var m: Dictionary = MASTERS[story_index]
+	var t: Dictionary = m.transport
+	if t.is_empty() or not defeated_masters.has(String(m.id)):
+		hub_info.text = _t("hub_travel_locked") % String(m.name)
+		return
+	var fare: int = int(t.fare)
+	if coins < fare:
+		hub_info.text = _t("need_coins") % [fare, coins]
+		return
+	if _pending_buy != "travel":
+		_pending_buy = "travel"
+		hub_info.text = _t("hub_travel_confirm") % [fare, _loc(t, "name")]
+		return
+	_pending_buy = ""
+	coins -= fare
+	story_index += 1
+	local_pick = 0
+	_save_workshop()
+	_play_arrival()
+
+
+func _on_dest_pressed(i: int) -> void:
+	# after STAY the whole country is open: free travel, no telling (every state was seen)
+	story_index = i
+	story_seen = i
+	local_pick = 0
+	_save_workshop()
+	_enter_state(State.HUB)
+	_curtain() # hub -> hub skips the state change's own wipe
+
+
+func _on_ending_choice(stay: bool) -> void:
+	# SAIL HOME: the last telling, then the title (NEW JOURNEY there starts over, wallet kept);
+	# STAY: the last telling, then the hub with free travel and rematches
+	story_ending = "stay" if stay else "home"
+	journey_done = true
+	_save_workshop()
+	_play_cutscene(SD.EPILOGUE_STAY if stay else SD.EPILOGUE_HOME, _t("ending_title"),
+		_enter_state.bind(State.HUB) if stay else _leave_to_title)
+
+
 func _build_cutscene_panel() -> void:
 	# the kelir: a backlit cloth screen; the gunungan opens and closes the telling,
 	# a swaying shadow puppet speaks, narration types out below
@@ -3946,8 +4405,49 @@ func _build_cutscene_panel() -> void:
 		frame.offset_left = -26.0 if side_right else 0.0
 		cutscene_panel.add_child(frame)
 
-	# the gunungan (tree of life) stands centre-stage to open the telling, then is
-	# planted at the side; _cutscene_begin/_cutscene_advance animate it
+	# the scene: a wide 2.5:1 stage above the text box, layered back to front (story_data beat
+	# contract): dim backdrop, the previous scene fading out, the scene, a ride, a top, a puppet.
+	# All are black cut-outs tinted ink against the lamp; the moving ones are placed by _show_beat.
+	# The stage keeps the art's 2048x820 shape at any window shape (so the movers' ground lines
+	# meet the art's) and starts below SKIP, so the button never covers the art.
+	var stage_box: AspectRatioContainer = AspectRatioContainer.new()
+	stage_box.ratio = 2048.0 / 820.0
+	stage_box.anchor_left = 0.05
+	stage_box.anchor_right = 0.95
+	stage_box.anchor_bottom = 0.76 # clear of the text box (from 170 px above the bottom)
+	stage_box.offset_top = 58.0 # SKIP ends at y 50
+	stage_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cutscene_panel.add_child(stage_box)
+	cut_stage = Control.new()
+	cut_stage.clip_contents = true # rides enter and leave at the stage edge
+	cut_stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stage_box.add_child(cut_stage)
+	var layers: Array[TextureRect] = []
+	var edge_fade: ShaderMaterial = ShaderMaterial.new() # every layer's flat left/right ends melt into the cloth
+	edge_fade.shader = Shader.new()
+	edge_fade.shader.code = "shader_type canvas_item;\nvoid fragment() {\n\tCOLOR = texture(TEXTURE, UV) * COLOR;\n" \
+		+ "\tCOLOR.a *= smoothstep(0.0, 0.06, UV.x) * (1.0 - smoothstep(0.94, 1.0, UV.x));\n}\n"
+	for i: int in 6:
+		var r: TextureRect = TextureRect.new()
+		r.material = edge_fade
+		r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		r.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		r.modulate = HT.INK # silhouette against the lamp
+		r.visible = false
+		if i < 3: # the wide scenes fill the stage; the movers are sized per beat
+			r.set_anchors_preset(Control.PRESET_FULL_RECT)
+		cut_stage.add_child(r)
+		layers.append(r)
+	cut_bg = layers[0]
+	cut_art_prev = layers[1]
+	cut_art = layers[2]
+	cut_ride = layers[3]
+	cut_top = layers[4]
+	cut_puppet = layers[5]
+
+	# the gunungan (tree of life) stands centre-stage to open the telling and fades as the
+	# first scene comes up, then returns to close it; _cutscene_begin/_cutscene_close animate it
 	cut_gunungan = TextureRect.new()
 	cut_gunungan.anchor_left = 0.5
 	cut_gunungan.anchor_right = 0.5
@@ -3964,22 +4464,11 @@ func _build_cutscene_panel() -> void:
 		cut_gunungan.texture = load(gun_path)
 	cutscene_panel.add_child(cut_gunungan)
 
-	cut_puppet = TextureRect.new()
-	cut_puppet.anchor_left = 0.52
-	cut_puppet.anchor_right = 0.94
-	cut_puppet.anchor_top = 0.06
-	cut_puppet.anchor_bottom = 0.66
-	cut_puppet.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	cut_puppet.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	cut_puppet.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	cut_puppet.modulate = HT.INK # silhouette against the lamp
-	cutscene_panel.add_child(cut_puppet)
-
 	var text_box: PanelContainer = _mk_panel_box(true, 8.0) # wide + short: slim frame
 	text_box.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	text_box.offset_left = 70.0
 	text_box.offset_right = -70.0
-	text_box.offset_top = -228.0
+	text_box.offset_top = -170.0 # a header and two caption lines
 	text_box.offset_bottom = -24.0
 	text_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	cutscene_panel.add_child(text_box)
@@ -3987,7 +4476,7 @@ func _build_cutscene_panel() -> void:
 	tv.add_theme_constant_override("separation", 6)
 	tv.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	text_box.add_child(tv)
-	# header: master name in Kurland, region, and the paragraph counter at the right
+	# header: the beat (THE LAND, THE PEOPLE...) in Kurland, the place, the continue hint and the beat counter at the right
 	var head: HBoxContainer = HBoxContainer.new()
 	head.add_theme_constant_override("separation", 14)
 	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4000,6 +4489,9 @@ func _build_cutscene_panel() -> void:
 	cut_region_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cut_region_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	head.add_child(cut_region_label)
+	cut_hint = _mk_label("", 12, CREAM_MUTED) # "click to continue", beside the counter: the box stays two lines tall
+	cut_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(cut_hint)
 	cut_counter_label = _mk_title("", 18, CREAM_MUTED)
 	cut_counter_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	head.add_child(cut_counter_label)
@@ -4007,20 +4499,17 @@ func _build_cutscene_panel() -> void:
 	cut_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	cut_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	cut_text.visible_characters_behavior = TextServer.VC_CHARS_AFTER_SHAPING # words never jump lines mid-type
-	cut_text.custom_minimum_size = Vector2(0.0, 84.0)
+	cut_text.custom_minimum_size = Vector2(0.0, 52.0) # two lines: the longest caption (~135 chars) fits
 	cut_text.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	tv.add_child(cut_text)
-	cut_hint = _mk_label("", 12, CREAM_MUTED)
-	cut_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	tv.add_child(cut_hint)
 
 	cut_skip_button = _mk_button("", WOOD_DARK, true)
 	cut_skip_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	cut_skip_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN # longer labels (LANGKAU) grow inward
 	cut_skip_button.offset_left = -130.0
 	cut_skip_button.offset_right = -40.0
-	cut_skip_button.offset_top = 20.0
-	cut_skip_button.offset_bottom = 56.0
+	cut_skip_button.offset_top = 14.0 # above the stage (from y 58)
+	cut_skip_button.offset_bottom = 50.0
 	cut_skip_button.pressed.connect(_cutscene_finish)
 	cutscene_panel.add_child(cut_skip_button)
 
@@ -4031,42 +4520,66 @@ func _on_cutscene_gui_input(event: InputEvent) -> void:
 		_cutscene_advance()
 
 
-func _cutscene_begin(idx: int) -> void:
-	var m: Dictionary = MASTERS[idx]
-	_cut_pars = CUTSCENES[String(m.id)][lang]
+func _play_cutscene(beats: Array, title: String, done: Callable) -> void:
+	# a wayang telling on the kelir (beats per the story_data beat contract); done runs once
+	# when it ends: the natural close, SKIP or Esc
+	_cut_beats = beats
+	_cut_title = title
+	_cut_done = done
+	_enter_state(State.CUTSCENE)
+
+
+func _play_arrival() -> void:
+	# arriving in story_index's state: the shipwreck (first stop) or the ride from the last
+	# state, then its land, people, food and master; the arena swaps in behind the opaque kelir
+	var m: Dictionary = MASTERS[story_index]
+	var beats: Array = []
+	if story_index == 0:
+		beats.append_array(SD.PROLOGUE)
+	else:
+		var t: Dictionary = MASTERS[story_index - 1].transport
+		beats.append({"kind": "travel", "art": t.strip, "ride": t.ride, "text_en": t.text_en, "text_ms": t.text_ms})
+	beats.append_array(m.beats)
+	_play_cutscene(beats, _loc(m, "region"), _on_arrival_done)
+	_apply_arena(String(m.arena))
+
+
+func _on_arrival_done() -> void:
+	story_seen = story_index
+	_save_workshop()
+	if tutorial_done:
+		_enter_state(State.HUB)
+	else:
+		_start_tutorial()
+
+
+func _start_tutorial() -> void:
+	# the first match, straight from the arrival: a Perlis villager, Normal AI and the one-shot
+	# hints (arena._tutorial_duel), one round; won or lost, it leads to the hub
+	fight_kind = "tutorial"
+	local_pick = 0
+	duel_index = 0
+	_start_sp_fight()
+
+
+func _cutscene_begin() -> void:
 	_cut_idx = -1
-	cut_name_label.text = String(m.name)
-	cut_name_label.add_theme_color_override("font_color", m.get("color", PLAYER_COLOR))
-	cut_region_label.text = String(m["region_" + lang])
+	cut_name_label.add_theme_color_override("font_color", PLAYER_COLOR)
+	cut_region_label.text = _cut_title
 	cut_hint.text = _t("cut_continue")
 	cut_skip_button.text = _t("cut_skip")
 	if _cut_tick_stream == null:
 		_cut_tick_stream = _load_audio("res://assets/audio/sfx/ui_hover")
-	var path: String = "res://assets/wayang/wayang_%s.png" % String(m.id)
-	cut_puppet.visible = ResourceLoader.exists(path)
-	if cut_puppet.visible:
-		cut_puppet.texture = load(path)
-		cut_puppet.pivot_offset = Vector2(cut_puppet.size.x * 0.5, cut_puppet.size.y) # rocks from its rod
-		cut_puppet.rotation = 0.0
-		if _puppet_tween != null and _puppet_tween.is_valid():
-			_puppet_tween.kill()
-		_puppet_tween = create_tween().set_loops()
-		_puppet_tween.tween_property(cut_puppet, "rotation", deg_to_rad(3.0), 2.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-		_puppet_tween.tween_property(cut_puppet, "rotation", deg_to_rad(-3.0), 2.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	# opening: the gunungan stands centre, then is planted at the left as the
-	# puppet steps up to the lamp
+	for r: TextureRect in [cut_bg, cut_art_prev, cut_art, cut_ride, cut_top, cut_puppet]:
+		r.visible = false
+		r.texture = null
+	cut_stage.modulate.a = 1.0
+	# opening: the gunungan stands centre-stage, then fades as the first scene comes up
 	if _cut_gun_tween != null and _cut_gun_tween.is_valid():
 		_cut_gun_tween.kill()
-	cut_gunungan.offset_left = -170.0
-	cut_gunungan.offset_right = 170.0
-	cut_gunungan.scale = Vector2.ONE
-	cut_gunungan.pivot_offset = Vector2(170.0, cut_gunungan.size.y) # stands on its rod
-	cut_puppet.modulate.a = 0.0 if cut_gunungan.texture != null else 1.0
-	_cut_gun_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	_cut_gun_tween.tween_property(cut_gunungan, "offset_left", -170.0 - 470.0, 0.8).set_delay(0.3)
-	_cut_gun_tween.tween_property(cut_gunungan, "offset_right", 170.0 - 470.0, 0.8).set_delay(0.3)
-	_cut_gun_tween.tween_property(cut_gunungan, "scale", Vector2(0.7, 0.7), 0.8).set_delay(0.3)
-	_cut_gun_tween.tween_property(cut_puppet, "modulate:a", 1.0, 0.5).set_delay(0.7)
+	cut_gunungan.modulate.a = 1.0
+	_cut_gun_tween = create_tween()
+	_cut_gun_tween.tween_property(cut_gunungan, "modulate:a", 0.0, 0.7).set_delay(0.3)
 	_pulse(cut_hint)
 	_cutscene_advance()
 
@@ -4079,16 +4592,101 @@ func _cutscene_advance() -> void:
 		cut_text.visible_ratio = 1.0 # first click completes the typewriter
 		return
 	_cut_idx += 1
-	if _cut_idx == _cut_pars.size():
+	if _cut_idx == _cut_beats.size():
 		_cutscene_close()
-	if _cut_idx >= _cut_pars.size():
+	if _cut_idx >= _cut_beats.size():
 		return # closing; further clicks wait for it
-	cut_counter_label.text = "%d / %d" % [_cut_idx + 1, _cut_pars.size()]
-	cut_text.text = String(_cut_pars[_cut_idx])
+	var beat: Dictionary = _cut_beats[_cut_idx]
+	cut_name_label.text = _t("beat_" + String(beat.get("kind", "land")))
+	cut_counter_label.text = "%d / %d" % [_cut_idx + 1, _cut_beats.size()]
+	cut_text.text = _loc(beat, "text")
 	cut_text.visible_characters = 0
 	_cut_ticked = 0
 	_cut_tween = create_tween()
 	_cut_tween.tween_method(_cut_type, 0, cut_text.text.length(), maxf(cut_text.text.length() / 42.0, 0.6))
+	_show_beat(beat)
+
+
+func _show_beat(beat: Dictionary) -> void:
+	# one beat's layers: the new scene cross-fades over the last (its dim backdrop with it); a
+	# top drops onto its tip, wobbles still and steps aside for the master, who slides in from
+	# the right; a ride crosses its strip with a bob
+	for tw: Tween in _beat_tweens:
+		tw.kill()
+	_beat_tweens.clear()
+	cut_art_prev.texture = cut_art.texture
+	cut_art_prev.visible = cut_art.visible
+	cut_art_prev.modulate.a = cut_art.modulate.a
+	var fade: Tween = create_tween().set_parallel(true)
+	_beat_tweens.append(fade)
+	fade.tween_property(cut_art_prev, "modulate:a", 0.0, 0.5)
+	for layer: Array in [[cut_bg, "bg", 0.3], [cut_art, "art", 1.0]]:
+		var r: TextureRect = layer[0]
+		if _set_layer(r, beat, layer[1]):
+			r.modulate.a = 0.0
+			fade.tween_property(r, "modulate:a", float(layer[2]), 0.5)
+	# the stage's fitted size, worked out here: on a telling's first beat the kelir has only just
+	# been shown and its (hidden until now) AspectRatioContainer hasn't laid the stage out yet
+	var box: AspectRatioContainer = cut_stage.get_parent() as AspectRatioContainer
+	var stage: Vector2 = Vector2(minf(box.size.x, box.size.y * box.ratio), minf(box.size.y, box.size.x / box.ratio))
+	var enter_at: float = 0.0 # the master waits for the top's moment
+	if _set_layer(cut_top, beat, "top"):
+		var s: float = stage.y * 0.42 # a prop at the master's feet, not a boulder
+		var land_y: float = stage.y * (1.0 - CUT_GROUND) - s * (1.0 - CUT_TOP_TIP) # tip on the ground line
+		cut_top.size = Vector2(s, s)
+		cut_top.pivot_offset = Vector2(s * 0.5, s * (1.0 - CUT_TOP_TIP)) # wobbles about its tip
+		cut_top.position = Vector2((stage.x - s) * 0.5, land_y - stage.y * 0.4)
+		cut_top.rotation = 0.0
+		cut_top.modulate.a = 0.0
+		var drop: Tween = create_tween()
+		_beat_tweens.append(drop)
+		drop.tween_property(cut_top, "position:y", land_y, 0.4).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+		drop.parallel().tween_property(cut_top, "modulate:a", 1.0, 0.2)
+		for i: int in 6: # ±8°, dying away
+			var tilt: float = deg_to_rad(8.0) * (1.0 - i / 6.0) * (1.0 if i % 2 == 0 else -1.0)
+			drop.tween_property(cut_top, "rotation", tilt, 0.16).set_trans(Tween.TRANS_SINE)
+		drop.tween_property(cut_top, "rotation", 0.0, 0.16).set_trans(Tween.TRANS_SINE)
+		drop.tween_property(cut_top, "position:x", stage.x * 0.1, 0.5).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		enter_at = 2.0
+	if _set_layer(cut_puppet, beat, "puppet"):
+		var p: float = stage.y
+		var rest_x: float = stage.x * 0.96 - p
+		var feet_y: float = stage.y * (1.0 - CUT_GROUND) - p * (1.0 - CUT_PUPPET_FEET) # feet on the ground line
+		cut_puppet.size = Vector2(p, p) # its rods run on past the stage's foot (clipped)
+		cut_puppet.pivot_offset = Vector2(p * 0.5, p) # held on its rod
+		cut_puppet.position = Vector2(rest_x + stage.x * 0.18, feet_y)
+		cut_puppet.scale = Vector2(1.15, 1.15)
+		cut_puppet.rotation = 0.0
+		cut_puppet.modulate.a = 0.0
+		var step: Tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_beat_tweens.append(step)
+		step.tween_property(cut_puppet, "modulate:a", 1.0, 0.7).from(0.5).set_delay(enter_at)
+		step.tween_property(cut_puppet, "position:x", rest_x, 0.7).set_delay(enter_at)
+		step.tween_property(cut_puppet, "scale", Vector2.ONE, 0.7).set_delay(enter_at)
+		var sway: Tween = create_tween().set_loops() # the dalang rocks it on its rod
+		_beat_tweens.append(sway)
+		sway.tween_property(cut_puppet, "rotation", deg_to_rad(3.0), 2.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		sway.tween_property(cut_puppet, "rotation", deg_to_rad(-3.0), 2.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	if _set_layer(cut_ride, beat, "ride"):
+		var h: float = stage.y * 0.5
+		var ground: float = stage.y * (1.0 - CUT_RIDE_LANE) - h * (1.0 - CUT_RIDE_WHEELS) # wheels / keel on the lane
+		cut_ride.size = Vector2(h * 2.4, h)
+		cut_ride.position = Vector2(-cut_ride.size.x, ground)
+		var ride: Tween = create_tween()
+		_beat_tweens.append(ride)
+		ride.tween_property(cut_ride, "position:x", stage.x, 8.0).set_delay(0.3)
+		var bob: Tween = create_tween().set_loops()
+		_beat_tweens.append(bob)
+		bob.tween_property(cut_ride, "position:y", ground - 5.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		bob.tween_property(cut_ride, "position:y", ground, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+func _set_layer(rect: TextureRect, beat: Dictionary, key: String) -> bool:
+	# a beat layer names res://assets/wayang/<name>.png; a missing file just hides the layer
+	var path: String = "res://assets/wayang/%s.png" % String(beat.get(key, ""))
+	rect.visible = beat.has(key) and ResourceLoader.exists(path)
+	rect.texture = load(path) as Texture2D if rect.visible else null
+	return rect.visible
 
 
 func _cut_type(count: int) -> void:
@@ -4100,18 +4698,16 @@ func _cut_type(count: int) -> void:
 
 
 func _cutscene_close() -> void:
-	# natural end: the gunungan returns to centre stage and the puppet leaves the lamp;
-	# SKIP / Esc go straight to _cutscene_finish
+	# natural end: the gunungan returns centre-stage as the scene dims; SKIP / Esc go
+	# straight to _cutscene_finish
 	if cut_gunungan.texture == null:
 		_cutscene_finish()
 		return
 	if _cut_gun_tween != null and _cut_gun_tween.is_valid():
 		_cut_gun_tween.kill()
 	_cut_gun_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	_cut_gun_tween.tween_property(cut_gunungan, "offset_left", -170.0, 0.45)
-	_cut_gun_tween.tween_property(cut_gunungan, "offset_right", 170.0, 0.45)
-	_cut_gun_tween.tween_property(cut_gunungan, "scale", Vector2.ONE, 0.45)
-	_cut_gun_tween.tween_property(cut_puppet, "modulate:a", 0.0, 0.3)
+	_cut_gun_tween.tween_property(cut_gunungan, "modulate:a", 1.0, 0.45)
+	_cut_gun_tween.tween_property(cut_stage, "modulate:a", 0.0, 0.35)
 	_cut_gun_tween.chain().tween_callback(_cutscene_finish)
 
 
@@ -4120,11 +4716,15 @@ func _cutscene_finish() -> void:
 		return
 	if _cut_tween != null and _cut_tween.is_valid():
 		_cut_tween.kill()
-	if _puppet_tween != null and _puppet_tween.is_valid():
-		_puppet_tween.kill()
 	if _cut_gun_tween != null and _cut_gun_tween.is_valid():
 		_cut_gun_tween.kill()
-	_enter_state(State.WIND)
+	for tw: Tween in _beat_tweens:
+		tw.kill()
+	_beat_tweens.clear()
+	var done: Callable = _cut_done
+	_cut_done = Callable() # SKIP and the natural close can both land here: only the first runs it
+	if done.is_valid():
+		done.call()
 
 
 func _build_round_panel() -> void:
@@ -4132,6 +4732,7 @@ func _build_round_panel() -> void:
 	# around the score, why it ended, your round in numbers, rewards, then
 	# CONTINUE beside a bar that drains with the auto-advance timer
 	round_panel = _mk_fullrect_center()
+	round_panel.offset_top = 60.0 # centred below the HUD clock medallion: a master's reward card runs tall
 	var box: PanelContainer = _mk_panel_box(true, 14.0) # short panel: slim frame, roomy
 	box.custom_minimum_size = Vector2(560.0, 0.0)
 	round_panel.add_child(box)
@@ -4187,7 +4788,9 @@ func _build_round_panel() -> void:
 	v.add_child(mats_saved_label)
 	award_label = _mk_label("", 17, PLAYER_COLOR) # +XP and LEVEL UP lines
 	v.add_child(award_label)
-	unlock_label = _mk_label("", 18, PLAYER_COLOR)
+	unlock_label = _mk_label("", 18, PLAYER_COLOR) # a master's top for sale + their item and food
+	unlock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	unlock_label.custom_minimum_size = Vector2(492.0, 0.0)
 	unlock_label.visible = false
 	v.add_child(unlock_label)
 	match_point_label = _mk_title("", 26, DANGER)
@@ -4258,7 +4861,7 @@ func _fill_round_panel(winner: int, reason: Dictionary) -> void:
 	# (every caller sets the verdict first: a long one, e.g. a Malay master's win, steps down a size)
 	round_label.add_theme_font_size_override("font_size", 38 if round_label.text.length() <= 24 else 32)
 	var me: int = arena.my_id()
-	var campaign: bool = not net_active and not endless_mode
+	var campaign: bool = not net_active and not _single_round() # a best-of-3 master duel
 	round_score_row.visible = campaign or net_active
 	round_my_pips.visible = campaign
 	round_foe_pips.visible = campaign
@@ -4303,32 +4906,6 @@ func _build_over_panel() -> void:
 	over_stats = _mk_label("", 18)
 	v.add_child(over_title)
 	v.add_child(over_stats)
-	# campaign run: the seven masters as wayang, the beaten ones lit in gold
-	over_masters_caption = _mk_label("", 13, CREAM_MUTED)
-	over_masters_caption.visible = false
-	v.add_child(over_masters_caption)
-	over_masters_row = HBoxContainer.new()
-	over_masters_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	over_masters_row.add_theme_constant_override("separation", 6)
-	over_masters_row.visible = false
-	v.add_child(over_masters_row)
-	for m: Dictionary in MASTERS:
-		# each master's shadow on its own little kelir; the lamp is lit once beaten
-		var cell: TextureRect = TextureRect.new()
-		cell.texture = _kelir_texture()
-		cell.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		cell.custom_minimum_size = Vector2(44.0, 58.0)
-		cell.tooltip_text = String(m.name)
-		over_masters_row.add_child(cell)
-		var puppet: TextureRect = TextureRect.new()
-		var path: String = "res://assets/wayang/wayang_%s.png" % String(m.id)
-		puppet.texture = load(path) if ResourceLoader.exists(path) else null
-		puppet.set_anchors_preset(Control.PRESET_FULL_RECT)
-		puppet.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		puppet.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		puppet.modulate = HT.INK
-		puppet.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cell.add_child(puppet)
 	# coins earned this run, and NEW BEST / best in endless
 	over_coin_row = HBoxContainer.new()
 	over_coin_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -4394,10 +4971,9 @@ func _refresh_craft() -> void:
 		craft_opp_caption.text = _t("next_opp")
 		craft_opp_name.text = String(opp.name)
 		craft_opp_name.add_theme_color_override("font_color", opp.get("color", PLAYER_COLOR))
-		craft_opp_region.text = String(opp.get("region_" + lang, ""))
-		craft_opp_duel.text = (_t("wave_n") % (duel_index + 1)) if endless_mode \
-			else (_t("duel_n") % [mini(duel_index + 1, MASTERS.size()), MASTERS.size()])
-		var puppet_path: String = "res://assets/wayang/wayang_%s.png" % String(opp.id)
+		craft_opp_region.text = _loc(opp, "region")
+		craft_opp_duel.text = (_t("wave_n") % (duel_index + 1)) if endless_mode else _kind_text()
+		var puppet_path: String = "res://assets/wayang/wayang_%s.png" % String(opp.id) # villagers have none
 		craft_opp_puppet.texture = load(puppet_path) if ResourceLoader.exists(puppet_path) else null
 		craft_mats_hint.text = str(coins)
 	craft_sub.visible = net_active
@@ -4406,8 +4982,7 @@ func _refresh_craft() -> void:
 	var viewed: String = _craft_viewed()
 	var def: Dictionary = STYLE_DEFS[viewed]
 	var locked: bool = not unlocked_styles.has(viewed)
-	var idx: int = _master_index(viewed)
-	var gated: bool = idx >= 0 and not defeated_masters.has(String(MASTERS[idx].id))
+	var gate: String = _shop_gate(viewed)
 
 	craft_name_label.text = String(def.label)
 	craft_counter_label.text = "%d / %d" % [craft_index + 1, STYLE_DEFS.size()]
@@ -4416,8 +4991,8 @@ func _refresh_craft() -> void:
 	if locked:
 		if net_active:
 			craft_status_label.text = _t("locked_mp")
-		elif gated:
-			craft_status_label.text = _t("locked_hint") % String(MASTERS[idx].name)
+		elif gate != "":
+			craft_status_label.text = gate
 		else:
 			craft_status_label.text = _t("price_tag") % int(def.get("price", 0))
 		craft_status_label.add_theme_color_override("font_color", COPPER)
@@ -4624,19 +5199,20 @@ func _arena_round_finished(winner: int, reason: Dictionary = {}) -> void:
 func _sp_round_result(winner: int, reason: Dictionary) -> void:
 	if state != State.ROUND_OVER or net_active:
 		return # left to the title (or the match changed) during the KO delay
-	# endless waves are single rounds; campaign duels are best of 3
-	var outcome: int = (1 if winner == 1 else -1) if endless_mode else _duel_outcome(arena.scores)
+	# endless waves, village matches and the tutorial are single rounds; master duels are best of 3
+	var single: bool = _single_round()
+	var outcome: int = (1 if winner == 1 else -1) if single else _duel_outcome(arena.scores)
 	if winner != 0 and outcome != 0:
 		_finish_duel(outcome > 0, reason)
 		return
 	_reset_round_panel()
-	round_caption.text = _duel_caption(_current_opponent()) if endless_mode else _t("round_of") % sp_round
+	round_caption.text = _duel_caption(_current_opponent()) if single else _t("round_of") % sp_round
 	round_label.text = _t("round_draw") if winner == 0 else (_t("round_won") if winner == 1 else _t("round_lost") % String(_current_opponent().name))
 	round_label.add_theme_color_override("font_color", CREAM_MUTED if winner == 0 else (PLAYER_COLOR if winner == 1 else HT.SIDE_FOE))
 	if winner != 0:
 		_play_sfx(SND_WIN if winner == 1 else SND_LOSE, -3.0, 0.02)
 	_fill_round_panel(winner, reason)
-	if not endless_mode and int(arena.scores.get(1, 0)) == 1 and int(arena.scores.get(2, 0)) == 1:
+	if not single and int(arena.scores.get(1, 0)) == 1 and int(arena.scores.get(2, 0)) == 1:
 		_show_match_point()
 	_show_panel(round_panel)
 	_arm_round_advance(2.6, _sp_next_round)
@@ -4682,16 +5258,32 @@ func _reason_text(reason: Dictionary, winner: int) -> String:
 
 
 func _forfeit_duel() -> void:
-	# pause-menu FORFEIT DUEL: quitting a live campaign duel loses it like any other duel
-	# loss (the run starts over), so a losing duel can't be replayed from 0-0 via the title
-	if not net_active and not endless_mode and (state == State.WIND or state == State.BATTLE):
-		campaign_index = 0
+	# pause-menu leave: a live story fight counts as a lost fight (the dish is eaten, the next
+	# villager steps up, an abandoned first match was the tutorial) and goes back to the village
+	# hub with the journey kept; anything else (Endless, the hub's own MAIN MENU) goes to the title
+	if not net_active and not endless_mode and fight_kind != "" and (state == State.WIND or state == State.BATTLE):
+		get_tree().paused = false
+		Engine.time_scale = 1.0
+		var tutorial: bool = fight_kind == "tutorial"
+		_story_fight_done() # before HUB clears fight_kind
 		_save_workshop()
+		_enter_state(State.HUB)
+		if tutorial: # the same word from the master as after a played first match
+			_show_menu_notice(_t("hub_tutorial_done") % String(MASTERS[0].name), SONGKET_GOLD)
+		return
 	_leave_to_title()
 
 
+func _craft_back() -> void:
+	# workshop BACK / Esc: a story fight's loadout returns to the village hub; Endless to the title
+	if not net_active and not endless_mode:
+		_enter_state(State.HUB)
+	else:
+		_leave_to_title()
+
+
 func _leave_to_title() -> void:
-	# workshop BACK / Esc, endless pause MAIN MENU: the campaign continues from the title
+	# hub / workshop BACK / Esc, endless pause MAIN MENU: the story continues from the title
 	get_tree().paused = false
 	Engine.time_scale = 1.0
 	if net_active:
