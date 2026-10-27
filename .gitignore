@@ -7,3 +7,4 @@ PLAN.md
 dist
 *.blend1
 __pycache__/
+trailer/*.wav*
