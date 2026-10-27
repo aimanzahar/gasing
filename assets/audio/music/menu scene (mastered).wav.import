@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://dd0epr5b8ki6b"
+path="res://.godot/imported/menu scene (mastered).wav-c5fb32ea7a00261f1357f9d353797659.sample"
+
+[deps]
+
+source_file="res://assets/audio/music/menu scene (mastered).wav"
+dest_files=["res://.godot/imported/menu scene (mastered).wav-c5fb32ea7a00261f1357f9d353797659.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

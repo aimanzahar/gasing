@@ -575,10 +575,16 @@ def sfx():
 	write('sfx/rush_loop.ogg', y, len(y))
 
 
+def masters():
+	# the shipped beds are encoded from the mastered WAVs in music/; menu()/battle()/cutscene() stay as the trailer score's source
+	for name, src in (('menu', 'menu scene'), ('battle', 'battle scene'), ('cutscene', 'cutscene')):
+		x, sr = sf.read(os.path.join(OUT, 'music', f'{src} (mastered).wav'), dtype='float32', always_2d=True)
+		assert sr == SR, (src, sr)
+		write(f'music/{name}.ogg', x)
+
+
 if __name__ == '__main__':
 	sfx()
-	menu()
-	battle()
-	cutscene()
+	masters()
 	victory()
 	defeat()

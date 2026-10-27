@@ -5,9 +5,9 @@ License: CC0 1.0 Universal (public domain) - https://kenney.nl/support
 Music and SFX made for Gasing Pangkah
 Format: path | title | author | source | licence
 "Original" means synthesized in Python/numpy for this project (gamelan-style additive and modal synthesis, slendro/pelog tunings). No samples were used unless listed.
-music/menu.ogg | Menu - gamelan ladrang loop (slendro, 76 BPM, 32 beats) | original, generated for this project | - | original (project-owned)
-music/battle.ogg | Battle - gendang silat / kompang / pelog gamelan loop (136 BPM, 64 beats) | original, generated for this project | - | original (project-owned)
-music/cutscene.ogg | Cutscene - wayang kulit gender/slenthem bed (slendro, 60 BPM, 32 beats) | original, generated for this project | - | original (project-owned)
+music/menu.ogg | Menu loop (100.8 s), encoded from "menu scene (mastered).wav" | original, generated for this project | - | original (project-owned)
+music/battle.ogg | Battle loop (96 s), encoded from "battle scene (mastered).wav" | original, generated for this project | - | original (project-owned)
+music/cutscene.ogg | Cutscene loop (96 s), encoded from "cutscene (mastered).wav" | original, generated for this project | - | original (project-owned)
 music/victory.ogg | Victory stinger (4.4 s) | original, generated for this project | - | original (project-owned)
 music/defeat.ogg | Defeat stinger (4.4 s) | original, generated for this project | - | original (project-owned)
 sfx/whoosh.ogg | Dash whoosh | original, generated for this project | - | original (project-owned)
